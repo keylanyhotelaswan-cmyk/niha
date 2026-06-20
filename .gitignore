@@ -1,0 +1,14 @@
+node_modules/
+dist/
+build/
+.turbo/
+.vite/
+.vercel/
+.npm-cache/
+.tmp/
+.env
+.env.local
+.env.*.local
+coverage/
+*.log
+*.tsbuildinfo

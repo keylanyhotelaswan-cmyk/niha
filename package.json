@@ -1,0 +1,26 @@
+{
+  "name": "niha",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "npm@11.6.3",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web,print -c blue,green,yellow \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:print-bridge\"",
+    "dev:api": "npm run dev --workspace @niha/api",
+    "dev:web": "npm run dev --workspace @niha/web",
+    "dev:print-bridge": "npm run dev --workspace @niha/print-bridge",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "format": "npm run format --workspaces --if-present",
+    "setup:supabase-db": "node scripts/apply-supabase-env.mjs",
+    "db:cloud:push": "npm run setup:supabase-db && cd apps/api && npx prisma db push",
+    "db:cloud:seed": "npm run prisma:seed --workspace @niha/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
