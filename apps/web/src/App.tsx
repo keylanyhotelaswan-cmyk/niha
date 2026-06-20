@@ -7,7 +7,7 @@ import { HomeRedirect, PermissionRoute, RouteFallback } from './lib/route-guards
 const PosPage = lazy(() => import('./pages/pos-page.js').then((module) => ({ default: module.PosPage })));
 const TreasuryWorkspacePage = lazy(() => import('./pages/treasury-workspace/treasury-workspace-page.js').then((module) => ({ default: module.TreasuryWorkspacePage })));
 const ManagerUsersPage = lazy(() => import('./pages/manager-users-page.js').then((module) => ({ default: module.ManagerUsersPage })));
-const ReceiptSettingsPage = lazy(() => import('./pages/receipt-settings-page.tsx').then((module) => ({ default: module.ReceiptSettingsPage })));
+const ReceiptSettingsPage = lazy(() => import('./pages/receipt-settings-page.js').then((module) => ({ default: module.ReceiptSettingsPage })));
 const SettingsHubPage = lazy(() => import('./pages/settings/settings-hub-page.js').then((module) => ({ default: module.SettingsHubPage })));
 const InventoryPage = lazy(() => import('./pages/inventory-page.js').then((module) => ({ default: module.InventoryPage })));
 const SetupCostsPage = lazy(() => import('./pages/setup-costs-page.js').then((module) => ({ default: module.SetupCostsPage })));

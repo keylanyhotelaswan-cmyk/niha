@@ -47,7 +47,12 @@ export type KitchenReceiptData = {
   createdAt: string;
 };
 
-import { getReceiptSettings, saveReceiptSettings as persistReceiptSettings } from './pos-receipt-settings.js';
+import {
+  getReceiptSettings,
+  saveReceiptSettings as persistReceiptSettings,
+  getReceiptPrintWidthPx,
+  type ReceiptSettings,
+} from './pos-receipt-settings.js';
 
 export {
   buildCustomerReceiptHtml,
@@ -71,9 +76,8 @@ export {
   RECEIPT_CSS_WIDTH_PX,
   getReceiptPrintWidthPx,
   type ReceiptPrintCopies,
+  type ReceiptSettings,
 } from './pos-receipt-settings.js';
-
-export type { ReceiptSettings };
 
 export function isAutoPrintEnabled(): boolean {
   return getReceiptSettings().autoPrint;
@@ -207,7 +211,7 @@ function pngJobFromPayload(payload: PrintPayload) {
     pngHeightPx: payload.pngHeightPx ?? 800,
     pngWidthPx: payload.pngWidthPx ?? getReceiptPrintWidthPx(settings.paperWidthMm),
     paperWidthMm: payload.paperWidthMm ?? settings.paperWidthMm,
-    paperOrientation: 'portrait',
+    paperOrientation: 'portrait' as const,
     paperSize: settings.paperSize,
     ...(payload.label ? { label: payload.label } : {}),
   };

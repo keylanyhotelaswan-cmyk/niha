@@ -1,0 +1,31 @@
+# NestJS API — deploy separately from Vercel frontend.
+# Dashboard: https://dashboard.render.com → New → Blueprint → connect this repo.
+services:
+  - type: web
+    name: niha-api
+    runtime: node
+    rootDir: apps/api
+    buildCommand: npm install && npx prisma generate && npm run build
+    startCommand: npm run start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 4000
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 24h
+      - key: APP_URL
+        sync: false
+      - key: APP_URLS
+        sync: false
+      - key: DEFAULT_TIMEZONE
+        value: Africa/Cairo
+      - key: DEFAULT_CURRENCY
+        value: EGP

@@ -150,6 +150,7 @@ function kitchenDisplayNumber(orderNumber: string) {
   const m = orderNumber.match(/(\d{6})-(\d+)$/i);
   if (m) {
     const ym = m[1];
+    if (!ym) return padInvoiceNumber(orderNumber);
     const seq = String(Number(m[2])).padStart(3, '0');
     return `${ym.slice(2)}-${seq}`;
   }

@@ -67,7 +67,7 @@ function SettingsSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 key={item.path}
                 component={NavLink}
                 to={item.path}
-                end={item.end}
+                {...(item.end !== undefined ? { end: item.end } : {})}
                 onClick={onNavigate}
                 sx={{
                   px: 1.5,

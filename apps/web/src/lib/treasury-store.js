@@ -1,4 +1,10 @@
-export function treasuryTypeLabel(type) {
+export function treasuryTypeLabel(type, sourceType) {
+    if (sourceType === 'PROFIT_WITHDRAWAL')
+        return 'سحب أرباح';
+    if (sourceType === 'INTERNAL_WALLET_TRANSFER_OUT')
+        return 'تحويل ذكي - خروج';
+    if (sourceType === 'INTERNAL_WALLET_TRANSFER_IN')
+        return 'تحويل ذكي - دخول';
     const labels = {
         SALE_RECEIPT: 'تحصيل مبيعات',
         CASH_DEPOSIT: 'إيداع نقدي',

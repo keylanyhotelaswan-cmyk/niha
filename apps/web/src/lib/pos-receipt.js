@@ -1,7 +1,7 @@
 export const AUTO_PRINT_KEY = 'niha-pos-auto-print';
 export const PRINTER_NAME_KEY = 'niha-pos-printer-name';
 export const DEFAULT_PRINTER_NAME = 'XP-80C (copy 3)';
-import { getReceiptSettings, saveReceiptSettings as persistReceiptSettings } from './pos-receipt-settings.js';
+import { getReceiptSettings, saveReceiptSettings as persistReceiptSettings, getReceiptPrintWidthPx, } from './pos-receipt-settings.js';
 export { buildCustomerReceiptHtml, buildKitchenReceiptHtml, buildCustomerReceiptHtml as buildReceiptHtml, buildReceiptCss, renderCustomerReceiptPng, renderKitchenReceiptPng, getReceiptLayout, } from './pos-receipt-render.js';
 export { getReceiptSettings, saveReceiptSettings, resetReceiptSettings, getStoreBranding, sampleReceiptData, receiptLayoutFromSettings, DEFAULT_RECEIPT_SETTINGS, RECEIPT_SETTINGS_EVENT, RECEIPT_CSS_WIDTH_PX, getReceiptPrintWidthPx, } from './pos-receipt-settings.js';
 export function isAutoPrintEnabled() {

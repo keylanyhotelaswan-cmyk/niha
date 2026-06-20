@@ -25,7 +25,7 @@ function SettingsSidebar({ onNavigate }) {
                         const active = item.end
                             ? location.pathname === item.path
                             : location.pathname.startsWith(item.path);
-                        return (_jsx(ListItemButton, { component: NavLink, to: item.path, end: item.end, onClick: onNavigate, sx: {
+                        return (_jsx(ListItemButton, { component: NavLink, to: item.path, ...(item.end !== undefined ? { end: item.end } : {}), onClick: onNavigate, sx: {
                                 px: 1.5,
                                 py: 1.25,
                                 borderRadius: 3,
