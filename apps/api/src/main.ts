@@ -14,7 +14,19 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
   app.enableCors({
-    origin: isDevelopment ? true : allowedOrigins,
+    origin: isDevelopment
+      ? true
+      : (origin, callback) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+            return;
+          }
+          if (/^https:\/\/[\w-]+(-[\w-]+)*\.vercel\.app$/i.test(origin)) {
+            callback(null, true);
+            return;
+          }
+          callback(new Error('Not allowed by CORS'), false);
+        },
     credentials: true,
   });
   app.useGlobalPipes(

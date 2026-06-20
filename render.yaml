@@ -1,18 +1,17 @@
-# NestJS API — deploy separately from Vercel frontend.
-# Dashboard: https://dashboard.render.com → New → Blueprint → connect this repo.
+# Render Blueprint — https://dashboard.render.com/blueprints
+# After deploy: set VITE_API_URL on Vercel to https://niha-api.onrender.com/api
 services:
   - type: web
     name: niha-api
     runtime: node
-    rootDir: apps/api
-    buildCommand: npm install && npx prisma generate && npm run build
-    startCommand: npm run start
+    region: frankfurt
+    plan: free
+    buildCommand: npm install && npm run build --workspace @niha/api && npm run prisma:generate --workspace @niha/api && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
+    startCommand: node apps/api/dist/main.js
     healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        value: 4000
       - key: DATABASE_URL
         sync: false
       - key: DIRECT_URL
@@ -22,9 +21,9 @@ services:
       - key: JWT_EXPIRES_IN
         value: 24h
       - key: APP_URL
-        sync: false
+        value: https://niha-omega.vercel.app
       - key: APP_URLS
-        sync: false
+        value: https://niha-omega.vercel.app
       - key: DEFAULT_TIMEZONE
         value: Africa/Cairo
       - key: DEFAULT_CURRENCY
