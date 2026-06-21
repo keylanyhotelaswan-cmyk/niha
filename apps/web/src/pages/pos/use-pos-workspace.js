@@ -6,7 +6,7 @@ import { useAuth } from '../../lib/auth-context.js';
 import { invalidatePosQueries, patchPosCachesAfterAutoOpen, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosContext, usePosShiftSummary, useShiftClosedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
 import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
-import { isShiftOrderUncollected, mapApiOrderToSavedOrder, mapPaymentMethodCode, readPosBranchId, writePosBranchId, } from '../../lib/pos-store.js';
+import { isShiftOrderCollected, isShiftOrderUncollected, mapApiOrderToSavedOrder, mapPaymentMethodCode, readPosBranchId, writePosBranchId, } from '../../lib/pos-store.js';
 export function usePosWorkspace() {
     const queryClient = useQueryClient();
     const { accessToken, user, permissions } = useAuth();
@@ -16,10 +16,16 @@ export function usePosWorkspace() {
     const [selectedCashBoxId, setSelectedCashBoxId] = useState('');
     const effectiveBranchId = posContext?.branch?.id || branchId || branchList[0]?.id || readPosBranchId();
     const { data: cashBoxes = [] } = useCashBoxes(effectiveBranchId);
-    const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, selectedCashBoxId);
-    const shift = shiftData != null
-        ? (shiftData.shiftOpen ? shiftData.shift : null)
-        : (posContext?.shiftOpen ? posContext.shift ?? null : null);
+    const contextCashBoxId = posContext?.cashBox?.id ?? '';
+    const queryCashBoxId = selectedCashBoxId || contextCashBoxId || cashBoxes[0]?.id || '';
+    const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, queryCashBoxId);
+    const shift = useMemo(() => {
+        if (shiftData?.shiftOpen && shiftData.shift)
+            return shiftData.shift;
+        if (posContext?.shiftOpen && posContext.shift)
+            return posContext.shift;
+        return null;
+    }, [shiftData, posContext]);
     const canManageShift = canManageTreasury(permissions);
     const shiftOwned = Boolean(shift && user?.id && shift.openedById === user.id);
     const shiftOpen = Boolean(shift && (shiftOwned || canManageShift));
@@ -85,13 +91,17 @@ export function usePosWorkspace() {
     const shiftClosedOrders = useMemo(() => shiftClosedOrdersSource.map((o) => mapApiOrderToSavedOrder(o, 'closed')), [shiftClosedOrdersSource]);
     const shiftOrdersShowError = shiftOrdersError && shiftClosedOrders.length === 0;
     const uncollectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderUncollected(o)), [shiftClosedOrders]);
-    const collectedOrders = useMemo(() => shiftClosedOrders.filter((o) => !isShiftOrderUncollected(o)), [shiftClosedOrders]);
+    const collectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderCollected(o)), [shiftClosedOrders]);
     const uncollectedAmount = useMemo(() => uncollectedOrders.reduce((s, o) => s + o.total, 0), [uncollectedOrders]);
     const resolvedBranchId = posContext?.branch?.id || branchId || branchList[0]?.id;
     const resolvedCashBoxId = posContext?.cashBox?.id || selectedCashBoxId || cashBoxes[0]?.id;
     const contextReady = Boolean(resolvedBranchId && resolvedCashBoxId);
     const refreshAfterOrder = async (shiftId) => {
-        await refetchPosOrderData(queryClient, shiftId ?? effectiveShiftId);
+        const id = shiftId ?? shift?.id ?? effectiveShiftId;
+        if (id) {
+            await refetchPosOrderData(queryClient, id);
+        }
+        await refetchPosContext();
     };
     const refreshAll = async () => {
         invalidatePosQueries(queryClient);

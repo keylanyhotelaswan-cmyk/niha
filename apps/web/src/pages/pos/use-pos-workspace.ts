@@ -19,6 +19,7 @@ import {
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
 import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
 import {
+  isShiftOrderCollected,
   isShiftOrderUncollected,
   mapApiOrderToSavedOrder,
   mapPaymentMethodCode,
@@ -38,11 +39,15 @@ export function usePosWorkspace() {
 
   const effectiveBranchId = posContext?.branch?.id || branchId || branchList[0]?.id || readPosBranchId();
   const { data: cashBoxes = [] } = useCashBoxes(effectiveBranchId);
-  const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, selectedCashBoxId);
+  const contextCashBoxId = posContext?.cashBox?.id ?? '';
+  const queryCashBoxId = selectedCashBoxId || contextCashBoxId || cashBoxes[0]?.id || '';
+  const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, queryCashBoxId);
 
-  const shift = shiftData != null
-    ? (shiftData.shiftOpen ? shiftData.shift : null)
-    : (posContext?.shiftOpen ? posContext.shift ?? null : null);
+  const shift = useMemo(() => {
+    if (shiftData?.shiftOpen && shiftData.shift) return shiftData.shift;
+    if (posContext?.shiftOpen && posContext.shift) return posContext.shift;
+    return null;
+  }, [shiftData, posContext]);
   const canManageShift = canManageTreasury(permissions);
   const shiftOwned = Boolean(shift && user?.id && shift.openedById === user.id);
   const shiftOpen = Boolean(shift && (shiftOwned || canManageShift));
@@ -133,7 +138,7 @@ export function usePosWorkspace() {
     [shiftClosedOrders],
   );
   const collectedOrders = useMemo(
-    () => shiftClosedOrders.filter((o) => !isShiftOrderUncollected(o)),
+    () => shiftClosedOrders.filter((o) => isShiftOrderCollected(o)),
     [shiftClosedOrders],
   );
   const uncollectedAmount = useMemo(
@@ -146,7 +151,11 @@ export function usePosWorkspace() {
   const contextReady = Boolean(resolvedBranchId && resolvedCashBoxId);
 
   const refreshAfterOrder = async (shiftId?: string) => {
-    await refetchPosOrderData(queryClient, shiftId ?? effectiveShiftId);
+    const id = shiftId ?? shift?.id ?? effectiveShiftId;
+    if (id) {
+      await refetchPosOrderData(queryClient, id);
+    }
+    await refetchPosContext();
   };
 
   const refreshAll = async () => {

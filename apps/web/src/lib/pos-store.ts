@@ -33,8 +33,9 @@ export function isShiftOrderUncollected(order: SavedOrder) {
   return order.collectionStatus === 'uncollected' || order.paymentStatus === 'PENDING';
 }
 
+/** محصّل أو بانتظار اعتماد الإدارة */
 export function isShiftOrderCollected(order: SavedOrder) {
-  return !isShiftOrderUncollected(order);
+  return order.collectionStatus === 'approved' || order.collectionStatus === 'pending_approval';
 }
 
 export function createOrderCode() {

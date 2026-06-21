@@ -192,6 +192,28 @@ export type ReceiptSettingsSyncOptions = {
   token?: string | null;
 };
 
+/** إعدادات خاصة بكل جهاز — لا تُرفع للسيرفر */
+const LOCAL_RECEIPT_SETTING_KEYS = ['printerName'] as const satisfies readonly (keyof ReceiptSettings)[];
+
+function pickLocalReceiptSettings(settings: ReceiptSettings): Pick<ReceiptSettings, 'printerName'> {
+  return { printerName: settings.printerName };
+}
+
+function toServerReceiptPayload(settings: ReceiptSettings) {
+  const payload = { _v: RECEIPT_SETTINGS_VERSION, ...settings } as Record<string, unknown>;
+  for (const key of LOCAL_RECEIPT_SETTING_KEYS) {
+    delete payload[key];
+  }
+  return payload;
+}
+
+function mergeReceiptSettings(local: ReceiptSettings, remote: ReceiptSettings): ReceiptSettings {
+  return normalizeReceiptSettings({
+    ...remote,
+    ...pickLocalReceiptSettings(local),
+  });
+}
+
 export async function fetchReceiptSettingsFromServer(
   branchId: string,
   token: string,
@@ -215,7 +237,7 @@ export async function saveReceiptSettingsWithSync(
   if (sync?.branchId && sync.token) {
     try {
       const { apiSaveBranchReceiptSettings } = await import('./api.js');
-      await apiSaveBranchReceiptSettings(sync.branchId, { _v: RECEIPT_SETTINGS_VERSION, ...saved }, sync.token);
+      await apiSaveBranchReceiptSettings(sync.branchId, toServerReceiptPayload(saved), sync.token);
     } catch (err) {
       console.warn('[niha] failed to sync receipt settings to server', err);
     }
@@ -225,12 +247,14 @@ export async function saveReceiptSettingsWithSync(
 }
 
 export async function hydrateReceiptSettingsFromServer(branchId: string, token: string) {
+  const local = getReceiptSettings();
   const remote = await fetchReceiptSettingsFromServer(branchId, token);
   if (remote) {
-    saveReceiptSettings(remote);
-    return remote;
+    const merged = mergeReceiptSettings(local, remote);
+    saveReceiptSettings(merged);
+    return merged;
   }
-  return getReceiptSettings();
+  return local;
 }
 
 export function receiptLayoutFromSettings(settings = getReceiptSettings()) {

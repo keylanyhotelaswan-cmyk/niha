@@ -2,18 +2,24 @@ import {
   Alert,
   Button,
   Checkbox,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   Stack,
   Table,
   TableBody,
   TableCell,
   TableHead,
   TableRow,
+  TextField,
   Typography,
 } from '@mui/material';
 import { useMemo, useState } from 'react';
 import { SectionCard } from '../../shared.js';
 import { useAuth } from '../../../lib/auth-context.js';
 import { apiApproveTransaction, apiBatchApproveTransactions, apiRejectTransaction } from '../../../lib/api.js';
+import { parseApiErrorBody } from '../../../lib/api-client.js';
 import { PaymentMethodCards } from '../components/payment-method-cards.js';
 
 type ApprovalsTabProps = {
@@ -28,6 +34,9 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
   const paymentMethods = workspace?.context?.paymentMethods ?? [];
   const treasuryToday = workspace?.treasuryToday ?? {};
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState('');
+  const [rejectBusy, setRejectBusy] = useState(false);
 
   const allIds = useMemo(() => pending.map((p: any) => p.id), [pending]);
 
@@ -51,17 +60,33 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
     if (res.ok) {
       onMessage('تم الاعتماد النهائي.');
       onRefresh();
+    } else {
+      onMessage(parseApiErrorBody(res.body, 'فشل الاعتماد — تحقق من الصلاحيات'));
     }
   };
 
-  const rejectOne = async (id: string) => {
-    if (!accessToken) return;
-    const reason = window.prompt('سبب الرفض (اختياري):') ?? '';
-    const res = await apiRejectTransaction(id, reason.trim() || undefined, accessToken);
+  const confirmReject = async () => {
+    if (!accessToken || !rejectId) return;
+    setRejectBusy(true);
+    const res = await apiRejectTransaction(
+      rejectId,
+      rejectReason.trim() || undefined,
+      accessToken,
+    );
+    setRejectBusy(false);
     if (res.ok) {
+      setRejectId(null);
+      setRejectReason('');
       onMessage('تم رفض التحصيل — الطلب عاد لغير محصل في نقطة البيع.');
       onRefresh();
+    } else {
+      onMessage(parseApiErrorBody(res.body, 'فشل الرفض — تحقق من الصلاحيات'));
     }
+  };
+
+  const rejectOne = (id: string) => {
+    setRejectId(id);
+    setRejectReason('');
   };
 
   const approveBatch = async () => {
@@ -72,12 +97,15 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
       setSelected(new Set());
       onMessage(`تم اعتماد ${count} تحصيل نهائياً.`);
       onRefresh();
+    } else {
+      onMessage(parseApiErrorBody(res.body, 'فشل اعتماد الدفعة'));
     }
   };
 
   const inTreasuryTotal = Number(treasuryToday.approvedTotal ?? 0) + Number(treasuryToday.pendingTotal ?? 0);
 
   return (
+    <>
     <Stack spacing={2}>
       <SectionCard title="ملخص الخزنة اليوم">
         <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
@@ -178,5 +206,28 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
         </SectionCard>
       ) : null}
     </Stack>
+
+    <Dialog open={Boolean(rejectId)} onClose={() => !rejectBusy && setRejectId(null)} fullWidth maxWidth="xs">
+      <DialogTitle>رفض التحصيل</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          fullWidth
+          multiline
+          minRows={2}
+          label="سبب الرفض (اختياري)"
+          value={rejectReason}
+          onChange={(e) => setRejectReason(e.target.value)}
+          sx={{ mt: 1 }}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setRejectId(null)} disabled={rejectBusy}>إلغاء</Button>
+        <Button color="error" variant="contained" onClick={confirmReject} disabled={rejectBusy}>
+          تأكيد الرفض
+        </Button>
+      </DialogActions>
+    </Dialog>
+    </>
   );
 }

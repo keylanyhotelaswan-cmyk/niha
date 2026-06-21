@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import PDFDocument from 'pdfkit';
 import pdfPrinter from 'pdf-to-printer';
+import { listPrinters } from './printers.mjs';
 
 const { print } = pdfPrinter;
 
@@ -28,6 +29,36 @@ function resolveThermalPaperSize(paperWidthMm, explicit) {
   return fromEnv || undefined;
 }
 
+/**
+ * يطابق اسم الطابعة المحلي — «XP-80C (copy 3)» على جهاز قد لا يوجد على جهاز آخر.
+ * @param {string} requested
+ */
+export async function resolvePrinterName(requested) {
+  const name = String(requested ?? '').trim();
+  if (!name) throw new Error('اسم الطابعة مطلوب');
+
+  const printers = await listPrinters();
+  if (!printers.length) {
+    throw new Error('لا توجد طابعات على هذا الجهاز');
+  }
+
+  if (printers.includes(name)) return name;
+
+  const lower = name.toLowerCase();
+  const ci = printers.find((p) => p.toLowerCase() === lower);
+  if (ci) return ci;
+
+  const base = name.replace(/\s*\(copy\s*\d+\)/i, '').trim().toLowerCase();
+  const byBase = printers.find((p) => p.toLowerCase().startsWith(base) || base.startsWith(p.toLowerCase()));
+  if (byBase) return byBase;
+
+  const xp = printers.find((p) => /xp-?80/i.test(p));
+  if (xp && /xp-?80/i.test(name)) return xp;
+
+  const sample = printers.slice(0, 4).join('، ');
+  throw new Error(`الطابعة «${name}» غير موجودة على هذا الجهاز. المتاح: ${sample}`);
+}
+
 export async function printPngBase64(
   printerName,
   base64,
@@ -39,6 +70,8 @@ export async function printPngBase64(
 ) {
   if (!printerName?.trim()) throw new Error('printer-name-required');
   if (!base64?.trim()) throw new Error('png-required');
+
+  const resolvedPrinter = await resolvePrinterName(printerName);
 
   const pngBuffer = Buffer.from(base64, 'base64');
   const imgWidthPx = Math.max(1, Number(widthPx) || DEFAULT_WIDTH_PX);
@@ -88,7 +121,7 @@ export async function printPngBase64(
   });
 
   const printOptions = {
-    printer: printerName.trim(),
+    printer: resolvedPrinter,
     silent: true,
     scale: 'noscale',
   };

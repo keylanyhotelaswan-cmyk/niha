@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import { listPrinters } from './printers.mjs';
-import { printPngBase64 } from './print.mjs';
+import { printPngBase64, resolvePrinterName } from './print.mjs';
 
 const PORT = Number(process.env.NIHA_PRINT_PORT ?? 9321);
 const app = express();
@@ -36,10 +36,11 @@ app.post('/print', async (req, res) => {
   }
 
   try {
+    const resolvedPrinter = await resolvePrinterName(printer);
     for (let i = 0; i < jobs.length; i += 1) {
       const job = jobs[i];
       await printPngBase64(
-        printer,
+        resolvedPrinter,
         job.pngBase64,
         job.pngHeightPx,
         job.pngWidthPx,
@@ -51,7 +52,7 @@ app.post('/print', async (req, res) => {
         await new Promise((r) => setTimeout(r, 2500));
       }
     }
-    res.json({ ok: true, printer, count: jobs.length });
+    res.json({ ok: true, printer: resolvedPrinter, count: jobs.length });
   } catch (err) {
     res.status(500).json({
       ok: false,

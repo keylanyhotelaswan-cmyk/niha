@@ -143,6 +143,24 @@ export function saveReceiptSettings(settings) {
 export function resetReceiptSettings() {
     return saveReceiptSettings({ ...DEFAULT_RECEIPT_SETTINGS });
 }
+/** إعدادات خاصة بكل جهاز — لا تُرفع للسيرفر */
+const LOCAL_RECEIPT_SETTING_KEYS = ['printerName'];
+function pickLocalReceiptSettings(settings) {
+    return { printerName: settings.printerName };
+}
+function toServerReceiptPayload(settings) {
+    const payload = { _v: RECEIPT_SETTINGS_VERSION, ...settings };
+    for (const key of LOCAL_RECEIPT_SETTING_KEYS) {
+        delete payload[key];
+    }
+    return payload;
+}
+function mergeReceiptSettings(local, remote) {
+    return normalizeReceiptSettings({
+        ...remote,
+        ...pickLocalReceiptSettings(local),
+    });
+}
 export async function fetchReceiptSettingsFromServer(branchId, token) {
     try {
         const { apiGetBranchReceiptSettings } = await import('./api.js');
@@ -160,7 +178,7 @@ export async function saveReceiptSettingsWithSync(settings, sync) {
     if (sync?.branchId && sync.token) {
         try {
             const { apiSaveBranchReceiptSettings } = await import('./api.js');
-            await apiSaveBranchReceiptSettings(sync.branchId, { _v: RECEIPT_SETTINGS_VERSION, ...saved }, sync.token);
+            await apiSaveBranchReceiptSettings(sync.branchId, toServerReceiptPayload(saved), sync.token);
         }
         catch (err) {
             console.warn('[niha] failed to sync receipt settings to server', err);
@@ -169,12 +187,14 @@ export async function saveReceiptSettingsWithSync(settings, sync) {
     return saved;
 }
 export async function hydrateReceiptSettingsFromServer(branchId, token) {
+    const local = getReceiptSettings();
     const remote = await fetchReceiptSettingsFromServer(branchId, token);
     if (remote) {
-        saveReceiptSettings(remote);
-        return remote;
+        const merged = mergeReceiptSettings(local, remote);
+        saveReceiptSettings(merged);
+        return merged;
     }
-    return getReceiptSettings();
+    return local;
 }
 export function receiptLayoutFromSettings(settings = getReceiptSettings()) {
     const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
