@@ -18,6 +18,7 @@
     "format": "npm run format --workspaces --if-present",
     "setup:supabase-db": "node scripts/apply-supabase-env.mjs",
     "render:env": "node scripts/print-render-env.mjs",
+    "render:migrate": "node scripts/render-prisma-deploy.mjs",
     "db:cloud:push": "npm run setup:supabase-db && cd apps/api && npx prisma db push",
     "db:cloud:seed": "npm run prisma:seed --workspace @niha/api"
   },
