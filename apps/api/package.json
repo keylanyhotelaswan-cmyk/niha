@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "nest start --watch",
     "dev:watch": "nest start --watch",
     "build": "npx nest build",

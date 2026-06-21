@@ -642,7 +642,8 @@ export class TreasuryService {
           select: { id: true, orderNumber: true, customerName: true, createdById: true, createdBy: { select: { fullName: true } } },
         })
       : [];
-    const orderMap = new Map(orders.map((o) => [o.id, o]));
+    const orderMap = new Map(orders.map((o) => [o.id, o] as const));
+    type OrderSummary = (typeof orders)[number];
 
     const grouped = new Map<string, typeof transactions>();
     for (const tx of transactions) {
@@ -652,7 +653,7 @@ export class TreasuryService {
 
     return Array.from(grouped.values()).map((group) => {
       const tx = group[0]!;
-      const order = tx.sourceType === 'ORDER' ? orderMap.get(tx.sourceId) : null;
+      const order: OrderSummary | null | undefined = tx.sourceType === 'ORDER' ? orderMap.get(tx.sourceId) : null;
       return {
         id: tx.id,
         transactionIds: group.map((item) => item.id),
