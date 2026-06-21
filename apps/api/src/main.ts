@@ -12,6 +12,11 @@ async function bootstrap() {
   const isDevelopment = (process.env.NODE_ENV ?? 'development') === 'development';
   const allowedOrigins = config.get<string[]>('appUrls') ?? [config.get<string>('appUrl') ?? 'http://localhost:5173'];
 
+  /** Niha Desktop serves the UI from a random 127.0.0.1 port inside Electron. */
+  function isDesktopLocalOrigin(origin: string) {
+    return /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/i.test(origin);
+  }
+
   app.setGlobalPrefix('api');
   app.enableCors({
     origin: isDevelopment
@@ -22,6 +27,10 @@ async function bootstrap() {
             return;
           }
           if (/^https:\/\/[\w-]+(-[\w-]+)*\.vercel\.app$/i.test(origin)) {
+            callback(null, true);
+            return;
+          }
+          if (isDesktopLocalOrigin(origin)) {
             callback(null, true);
             return;
           }
