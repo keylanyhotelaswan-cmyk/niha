@@ -51,6 +51,7 @@ import {
   getReceiptSettings,
   saveReceiptSettings as persistReceiptSettings,
   getReceiptPrintWidthPx,
+  getReceiptPrintableWidthMm,
   type ReceiptSettings,
 } from './pos-receipt-settings.js';
 
@@ -75,6 +76,7 @@ export {
   RECEIPT_SETTINGS_EVENT,
   RECEIPT_CSS_WIDTH_PX,
   getReceiptPrintWidthPx,
+  getReceiptPrintableWidthMm,
   type ReceiptPrintCopies,
   type ReceiptSettings,
 } from './pos-receipt-settings.js';
@@ -210,7 +212,7 @@ function pngJobFromPayload(payload: PrintPayload) {
     pngBase64: payload.pngBase64,
     pngHeightPx: payload.pngHeightPx ?? 800,
     pngWidthPx: payload.pngWidthPx ?? getReceiptPrintWidthPx(settings.paperWidthMm),
-    paperWidthMm: payload.paperWidthMm ?? settings.paperWidthMm,
+    paperWidthMm: payload.paperWidthMm ?? getReceiptPrintableWidthMm(settings.paperWidthMm),
     paperOrientation: 'portrait' as const,
     paperSize: settings.paperSize,
     ...(payload.label ? { label: payload.label } : {}),

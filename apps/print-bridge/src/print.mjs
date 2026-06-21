@@ -8,7 +8,7 @@ import pdfPrinter from 'pdf-to-printer';
 const { print } = pdfPrinter;
 
 const MM_TO_PT = 72 / 25.4;
-/** 576px @ 203 DPI = 80mm */
+/** 576px @ 203 DPI ≈ 72mm printable on 80mm roll (XP-80C) */
 const DEFAULT_WIDTH_PX = 576;
 const MIN_PAGE_HEIGHT_MM = 12;
 

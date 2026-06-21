@@ -2,6 +2,7 @@ import {
   Alert,
   Box,
   Button,
+  Chip,
   Dialog,
   DialogActions,
   DialogContent,
@@ -36,12 +37,16 @@ import { formatCurrency } from './utils.js';
 import { localTodayKey } from '../../lib/date-utils.js';
 import { useAuth } from '../../lib/auth-context.js';
 import { canManagePosPrinting, hasPermission } from '../../lib/permissions.js';
+import { useDesktopUpdate } from '../../hooks/use-desktop-update.js';
+import { useDesktopVersion } from '../../hooks/use-desktop-version.js';
 
 export function PosPage() {
   const theme = useTheme();
   const navigate = useNavigate();
   const fullScreenModal = useMediaQuery(theme.breakpoints.down('md'));
   const { permissions } = useAuth();
+  const { label: desktopUpdateLabel } = useDesktopUpdate();
+  const desktopVersion = useDesktopVersion();
   const workspace = usePosWorkspace();
   const canManagePrint = canManagePosPrinting(permissions);
   const canUsePrint = workspace.printingEnabled;
@@ -180,6 +185,16 @@ export function PosPage() {
           <Box>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
               <Typography variant="h5" fontWeight={800}>نقطة البيع</Typography>
+              {window.electronAPI?.isDesktop ? (
+                <Chip
+                  label={desktopVersion ? `Niha Desktop v${desktopVersion}` : 'Niha Desktop'}
+                  size="small"
+                  sx={{ bgcolor: 'rgba(255,247,237,0.18)', color: '#fff7ed', fontWeight: 700 }}
+                />
+              ) : null}
+              {desktopUpdateLabel ? (
+                <Chip label={desktopUpdateLabel} size="small" color="warning" sx={{ fontWeight: 700 }} />
+              ) : null}
               <Typography variant="caption" sx={{ bgcolor: workspace.shiftOpen ? 'rgba(34,197,94,0.25)' : 'rgba(239,68,68,0.25)', px: 1, py: 0.25, borderRadius: 2, fontWeight: 700 }}>
                 {workspace.shiftOpen ? 'وردية مفتوحة' : 'وردية مغلقة'}
               </Typography>

@@ -12,6 +12,16 @@
     "dev:api": "npm run dev --workspace @niha/api",
     "dev:web": "npm run dev --workspace @niha/web",
     "dev:print-bridge": "npm run dev --workspace @niha/print-bridge",
+    "dev:desktop": "concurrently -n api,web,print,desktop -c blue,green,yellow,cyan \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:print-bridge\" \"npm run dev --workspace @niha/desktop\"",
+    "dev:desktop:cloud": "concurrently -n web,print,desktop -c green,yellow,cyan \"cross-env VITE_API_URL=https://niha-jxjq.onrender.com/api npm run dev:web\" \"npm run dev:print-bridge\" \"npm run dev --workspace @niha/desktop\"",
+    "build:web:desktop": "cross-env VITE_ELECTRON=1 VITE_API_URL=https://niha-jxjq.onrender.com/api npm run build --workspace @niha/web",
+    "build:desktop": "npm run build:web:desktop",
+    "pack:desktop": "npm run build:desktop && node scripts/prepare-desktop-pack.mjs && npm run pack --workspace @niha/desktop",
+    "pack:desktop:dir": "npm run build:desktop && node scripts/prepare-desktop-pack.mjs && npm run pack:dir --workspace @niha/desktop",
+    "release:desktop": "node scripts/release-desktop.mjs",
+    "publish:desktop": "node scripts/publish-desktop.mjs",
+    "deploy:all": "node scripts/deploy-all.mjs",
+    "verify:desktop": "node scripts/verify-desktop.mjs",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
@@ -23,6 +33,9 @@
     "db:cloud:seed": "npm run prisma:seed --workspace @niha/api"
   },
   "devDependencies": {
-    "concurrently": "^9.1.2"
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "cross-spawn": "^7.0.6",
+    "app-builder-bin": "^5.0.0-alpha.10"
   }
 }

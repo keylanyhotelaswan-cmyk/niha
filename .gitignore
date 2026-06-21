@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+dist/desktop/
 .turbo/
 .vite/
 .vercel/
@@ -10,6 +11,7 @@ build/
 .env.local
 .env.*.local
 render-env-copy.txt
+.desktop-pack/
 coverage/
 *.log
 *.tsbuildinfo

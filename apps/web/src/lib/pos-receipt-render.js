@@ -1,5 +1,5 @@
 import html2canvasPkg from 'html2canvas';
-import { getReceiptCssWidthPx, getReceiptPrintWidthPx, getReceiptSettings, receiptLayoutFromSettings, scaledFont, } from './pos-receipt-settings.js';
+import { getReceiptCssWidthPx, getReceiptPrintWidthPx, getReceiptPrintableWidthMm, getReceiptSettings, receiptLayoutFromSettings, scaledFont, } from './pos-receipt-settings.js';
 const html2canvas = html2canvasPkg;
 const capture = typeof html2canvas === 'function'
     ? html2canvas
@@ -71,7 +71,7 @@ export function buildReceiptCss(settings, renderWidthPx) {
   .items{width:100%;border-collapse:collapse;table-layout:fixed;font-size:${fs(settings.fontBody)}px;margin:4px 0}
   .items td{padding:5px 0;vertical-align:top;line-height:1.35;word-wrap:break-word}
   .items .qty{width:12%;font-weight:800;text-align:center}
-  .items .name{width:53%;font-weight:600;padding-right:4px}
+  .items .name{width:53%;font-weight:600;padding-right:4px;overflow-wrap:anywhere;word-break:break-word}
   .items .price{width:35%;font-weight:700;text-align:left;direction:ltr;white-space:nowrap}
 
   .total-box{
@@ -270,10 +270,12 @@ function normalizeCanvasToWidth(source, targetWidth) {
     return out;
 }
 export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings()) {
+    const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
     const printWidthPx = getReceiptPrintWidthPx(settings.paperWidthMm);
+    const printableWidthMm = getReceiptPrintableWidthMm(settings.paperWidthMm);
     const iframe = document.createElement('iframe');
     iframe.setAttribute('title', 'receipt-render');
-    iframe.style.cssText = `position:fixed;left:-9999px;top:0;width:${printWidthPx}px;max-width:${printWidthPx}px;height:auto;border:0;visibility:hidden;overflow:hidden;`;
+    iframe.style.cssText = `position:fixed;left:-9999px;top:0;width:${cssWidthPx}px;max-width:${cssWidthPx}px;height:auto;border:0;visibility:hidden;overflow:visible;`;
     document.body.appendChild(iframe);
     const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
     if (!doc) {
@@ -298,8 +300,8 @@ export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings())
         const rawCanvas = await capture(target, {
             backgroundColor: '#ffffff',
             scale: captureScale,
-            width: printWidthPx,
-            windowWidth: printWidthPx,
+            width: cssWidthPx,
+            windowWidth: cssWidthPx,
             height: contentHeight + heightPad,
             windowHeight: contentHeight + heightPad,
             scrollX: 0,
@@ -315,7 +317,7 @@ export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings())
             base64,
             heightPx: canvas.height,
             widthPx: printWidthPx,
-            paperWidthMm: settings.paperWidthMm,
+            paperWidthMm: printableWidthMm,
         };
     }
     finally {
@@ -323,10 +325,10 @@ export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings())
     }
 }
 export async function renderCustomerReceiptPng(data, settings = getReceiptSettings()) {
-    return renderHtmlToPng(buildCustomerReceiptHtml(data, settings, true), settings);
+    return renderHtmlToPng(buildCustomerReceiptHtml(data, settings, false), settings);
 }
 export async function renderKitchenReceiptPng(data, settings = getReceiptSettings()) {
-    return renderHtmlToPng(buildKitchenReceiptHtml(data, settings, true), settings);
+    return renderHtmlToPng(buildKitchenReceiptHtml(data, settings, false), settings);
 }
 /** @deprecated */
 export function formatReceiptDateTime(isoOrStr) {

@@ -1,5 +1,5 @@
 import { DEFAULT_PRINTER_NAME, readSavedPrinterName } from './pos-receipt.js';
-import { getReceiptSettings, getReceiptPrintWidthPx } from './pos-receipt-settings.js';
+import { getReceiptSettings, getReceiptPrintWidthPx, getReceiptPrintableWidthMm } from './pos-receipt-settings.js';
 
 export const PRINT_BRIDGE_URL = 'http://127.0.0.1:9321';
 
@@ -67,7 +67,7 @@ export async function bridgePrintJobs(jobs: BridgePrintJob[]): Promise<BridgePri
           pngBase64: j.pngBase64,
           pngHeightPx: j.pngHeightPx,
           pngWidthPx: j.pngWidthPx ?? getReceiptPrintWidthPx(defaults.paperWidthMm),
-          paperWidthMm: j.paperWidthMm ?? defaults.paperWidthMm,
+          paperWidthMm: j.paperWidthMm ?? getReceiptPrintableWidthMm(defaults.paperWidthMm),
           paperOrientation: 'portrait',
           paperSize: j.paperSize ?? defaults.paperSize,
         })),

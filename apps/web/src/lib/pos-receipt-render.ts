@@ -2,6 +2,7 @@ import html2canvasPkg from 'html2canvas';
 import {
   getReceiptCssWidthPx,
   getReceiptPrintWidthPx,
+  getReceiptPrintableWidthMm,
   getReceiptSettings,
   receiptLayoutFromSettings,
   scaledFont,
@@ -85,7 +86,7 @@ export function buildReceiptCss(settings: ReceiptSettings, renderWidthPx?: numbe
   .items{width:100%;border-collapse:collapse;table-layout:fixed;font-size:${fs(settings.fontBody)}px;margin:4px 0}
   .items td{padding:5px 0;vertical-align:top;line-height:1.35;word-wrap:break-word}
   .items .qty{width:12%;font-weight:800;text-align:center}
-  .items .name{width:53%;font-weight:600;padding-right:4px}
+  .items .name{width:53%;font-weight:600;padding-right:4px;overflow-wrap:anywhere;word-break:break-word}
   .items .price{width:35%;font-weight:700;text-align:left;direction:ltr;white-space:nowrap}
 
   .total-box{
@@ -329,10 +330,12 @@ export async function renderHtmlToPng(
   fullHtml: string,
   settings = getReceiptSettings(),
 ): Promise<{ base64: string; heightPx: number; widthPx: number; paperWidthMm: number } | null> {
+  const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
   const printWidthPx = getReceiptPrintWidthPx(settings.paperWidthMm);
+  const printableWidthMm = getReceiptPrintableWidthMm(settings.paperWidthMm);
   const iframe = document.createElement('iframe');
   iframe.setAttribute('title', 'receipt-render');
-  iframe.style.cssText = `position:fixed;left:-9999px;top:0;width:${printWidthPx}px;max-width:${printWidthPx}px;height:auto;border:0;visibility:hidden;overflow:hidden;`;
+  iframe.style.cssText = `position:fixed;left:-9999px;top:0;width:${cssWidthPx}px;max-width:${cssWidthPx}px;height:auto;border:0;visibility:hidden;overflow:visible;`;
   document.body.appendChild(iframe);
 
   const doc = iframe.contentDocument ?? iframe.contentWindow?.document;
@@ -363,8 +366,8 @@ export async function renderHtmlToPng(
     const rawCanvas = await capture(target, {
       backgroundColor: '#ffffff',
       scale: captureScale,
-      width: printWidthPx,
-      windowWidth: printWidthPx,
+      width: cssWidthPx,
+      windowWidth: cssWidthPx,
       height: contentHeight + heightPad,
       windowHeight: contentHeight + heightPad,
       scrollX: 0,
@@ -381,7 +384,7 @@ export async function renderHtmlToPng(
       base64,
       heightPx: canvas.height,
       widthPx: printWidthPx,
-      paperWidthMm: settings.paperWidthMm,
+      paperWidthMm: printableWidthMm,
     };
   } finally {
     document.body.removeChild(iframe);
@@ -389,11 +392,11 @@ export async function renderHtmlToPng(
 }
 
 export async function renderCustomerReceiptPng(data: CustomerReceiptInput, settings = getReceiptSettings()) {
-  return renderHtmlToPng(buildCustomerReceiptHtml(data, settings, true), settings);
+  return renderHtmlToPng(buildCustomerReceiptHtml(data, settings, false), settings);
 }
 
 export async function renderKitchenReceiptPng(data: KitchenReceiptInput, settings = getReceiptSettings()) {
-  return renderHtmlToPng(buildKitchenReceiptHtml(data, settings, true), settings);
+  return renderHtmlToPng(buildKitchenReceiptHtml(data, settings, false), settings);
 }
 
 /** @deprecated */

@@ -9,9 +9,18 @@ export const DEFAULT_THERMAL_PAPER_SIZE = '80(72.1) x 297 mm';
 export function mmToReceiptPx(mm) {
     return Math.round((mm / 25.4) * RECEIPT_DPI);
 }
-/** عرض PNG للطباعة = 203 DPI × عرض الورق (576px لـ 80mm) */
+/** XP-80C printable area on an 80mm roll (driver label: 80(72.1) x 297 mm) */
+export const RECEIPT_PRINTABLE_MM_80 = 72;
+export function getReceiptPrintableWidthMm(paperWidthMm = 80) {
+    if (paperWidthMm >= 78)
+        return RECEIPT_PRINTABLE_MM_80;
+    if (paperWidthMm >= 56)
+        return 48;
+    return Math.max(40, Math.round(paperWidthMm * 0.9));
+}
+/** عرض PNG للطباعة = 203 DPI × العرض القابل للطباعة (576px ≈ 72mm على roll 80mm) */
 export function getReceiptPrintWidthPx(paperWidthMm = 80) {
-    return mmToReceiptPx(paperWidthMm);
+    return mmToReceiptPx(getReceiptPrintableWidthMm(paperWidthMm));
 }
 export function getReceiptCssWidthPx(paperWidthMm = 80) {
     return Math.round(RECEIPT_CSS_WIDTH_PX * paperWidthMm / 80);
@@ -137,8 +146,9 @@ export function resetReceiptSettings() {
 export function receiptLayoutFromSettings(settings = getReceiptSettings()) {
     const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
     const printWidthPx = getReceiptPrintWidthPx(settings.paperWidthMm);
+    const printableRollMm = getReceiptPrintableWidthMm(settings.paperWidthMm);
     const padMm = settings.marginMm;
-    const printableMm = Math.max(20, settings.paperWidthMm - padMm * 2);
+    const printableMm = Math.max(20, printableRollMm - padMm * 2);
     return {
         widthPx: cssWidthPx,
         cssWidthPx,
