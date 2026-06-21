@@ -12,7 +12,7 @@
  *   npm run deploy:all -- --no-bump
  */
 import { execSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { requireGhToken } from './load-dotenv.mjs';
@@ -21,9 +21,22 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const desktopPkgPath = join(root, 'apps/desktop/package.json');
 const GITHUB_TOKEN_PATTERN = /ghp_[A-Za-z0-9_]{20,}/;
 
+function parseStatusPath(line) {
+  let file = line.slice(3).trim();
+  if (file.includes(' -> ')) {
+    file = file.split(' -> ').pop().trim();
+  }
+  if (file.startsWith('"') && file.endsWith('"')) {
+    file = file.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
+  }
+  return file;
+}
+
 function assertNoSecretsInFile(relativePath) {
   const full = join(root, relativePath);
   if (!existsSync(full)) return;
+  if (statSync(full).isDirectory()) return;
+
   const content = readFileSync(full, 'utf8');
   if (GITHUB_TOKEN_PATTERN.test(content)) {
     console.error(`❌ GitHub token detected in ${relativePath}`);
@@ -38,7 +51,7 @@ function assertSafeToCommit() {
   const dirty = capture('git', ['status', '--porcelain']);
   for (const line of dirty.split('\n')) {
     if (!line.trim()) continue;
-    const file = line.slice(3).trim();
+    const file = parseStatusPath(line);
     if (file === '.env') {
       console.error('❌ Refusing to commit .env — keep tokens local only.');
       process.exit(1);

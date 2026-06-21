@@ -21,6 +21,7 @@
     "release:desktop": "node scripts/release-desktop.mjs",
     "publish:desktop": "node scripts/publish-desktop.mjs",
     "deploy:all": "node scripts/deploy-all.mjs",
+    "fix:env": "node scripts/repair-env.mjs",
     "verify:desktop": "node scripts/verify-desktop.mjs",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
