@@ -62,7 +62,7 @@ for (const [key, value] of Object.entries(renderVars)) {
   console.log(`${key}=${value}`);
 }
 console.log('\n=== Build Command ===');
-console.log('npm install && npm run build --workspace @niha/api && npm run prisma:generate --workspace @niha/api && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma');
+console.log('npm install --include=dev && npm run build --workspace @niha/api && npm run prisma:generate --workspace @niha/api && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma');
 console.log('\n=== Start Command ===');
 console.log('node apps/api/dist/main.js');
 console.log('\n=== Health Check ===');

@@ -6,7 +6,7 @@ services:
     runtime: node
     region: frankfurt
     plan: free
-    buildCommand: npm install && npm run build --workspace @niha/api && npm run prisma:generate --workspace @niha/api && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
+    buildCommand: npm install --include=dev && npm run build --workspace @niha/api && npm run prisma:generate --workspace @niha/api && npx prisma migrate deploy --schema apps/api/prisma/schema.prisma
     startCommand: node apps/api/dist/main.js
     healthCheckPath: /api/health
     envVars:
