@@ -1,4 +1,5 @@
 import { Injectable, ConflictException, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { CreateBranchDto, UpdateBranchDto, Branch, BranchStatus } from '@niha/contracts';
 
@@ -95,5 +96,37 @@ export class BranchesService {
     await this.prisma.branch.delete({
       where: { id },
     });
+  }
+
+  async getReceiptSettings(branchId: string): Promise<{ settings: Record<string, unknown> | null }> {
+    const branch = await this.prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { receiptSettings: true },
+    });
+
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
+
+    const settings = branch.receiptSettings;
+    return {
+      settings: settings && typeof settings === 'object' && !Array.isArray(settings)
+        ? (settings as Record<string, unknown>)
+        : null,
+    };
+  }
+
+  async updateReceiptSettings(branchId: string, settings: Record<string, unknown>) {
+    const branch = await this.prisma.branch.findUnique({ where: { id: branchId } });
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
+
+    await this.prisma.branch.update({
+      where: { id: branchId },
+      data: { receiptSettings: settings as Prisma.InputJsonValue },
+    });
+
+    return { settings };
   }
 }

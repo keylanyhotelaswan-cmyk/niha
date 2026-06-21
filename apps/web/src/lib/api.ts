@@ -33,6 +33,14 @@ export async function apiTransfer(dto: { branchId: string; cashBoxId: string; tr
   return apiPost('/treasury/transfer', dto, token);
 }
 
+export async function apiGetBranchReceiptSettings(branchId: string, token?: string) {
+  return apiGet(`/branches/${branchId}/receipt-settings`, token);
+}
+
+export async function apiSaveBranchReceiptSettings(branchId: string, settings: Record<string, unknown>, token?: string) {
+  return apiPut(`/branches/${branchId}/receipt-settings`, { settings }, token);
+}
+
 export async function apiCreateMovement(dto: {
   branchId: string;
   cashBoxId: string;

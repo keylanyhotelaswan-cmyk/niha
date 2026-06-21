@@ -22,6 +22,18 @@ export class BranchesController {
     return this.branchesService.findAll(organizationId);
   }
 
+  @Get(':id/receipt-settings')
+  @RequirePermissions('pos.use')
+  getReceiptSettings(@Param('id') id: string) {
+    return this.branchesService.getReceiptSettings(id);
+  }
+
+  @Put(':id/receipt-settings')
+  @RequirePermissions('treasury.manage')
+  updateReceiptSettings(@Param('id') id: string, @Body() body: { settings: Record<string, unknown> }) {
+    return this.branchesService.updateReceiptSettings(id, body.settings ?? {});
+  }
+
   @Get(':id')
   @RequirePermissions('branches.read')
   findOne(@Param('id') id: string) {

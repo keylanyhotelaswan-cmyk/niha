@@ -5,7 +5,7 @@ import { apiGet } from '../../lib/api-client.js';
 import { useAuth } from '../../lib/auth-context.js';
 import { invalidatePosQueries, patchPosCachesAfterAutoOpen, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosContext, usePosShiftSummary, useShiftClosedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
-import { RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
+import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
 import { isShiftOrderUncollected, mapApiOrderToSavedOrder, mapPaymentMethodCode, readPosBranchId, writePosBranchId, } from '../../lib/pos-store.js';
 export function usePosWorkspace() {
     const queryClient = useQueryClient();
@@ -46,6 +46,11 @@ export function usePosWorkspace() {
         window.addEventListener(RECEIPT_SETTINGS_EVENT, onSettingsChange);
         return () => window.removeEventListener(RECEIPT_SETTINGS_EVENT, onSettingsChange);
     }, [permissions]);
+    useEffect(() => {
+        if (!effectiveBranchId || !accessToken)
+            return;
+        hydrateReceiptSettingsFromServer(effectiveBranchId, accessToken).catch(() => { });
+    }, [effectiveBranchId, accessToken]);
     const { closeShift } = useShiftMutations();
     const operatorName = user?.fullName?.trim() || user?.username || 'مستخدم';
     const shiftOperatorName = shift?.openedBy?.fullName?.trim() || operatorName;

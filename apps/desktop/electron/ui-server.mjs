@@ -42,8 +42,11 @@ async function sendFile(res, filePath) {
   createReadStream(filePath).pipe(res);
 }
 
+/** Port ثابت — localStorage في Electron يعتمد على origin (127.0.0.1:PORT) */
+const DEFAULT_UI_PORT = 29280;
+
 export function getUiServerPort() {
-  return port;
+  return port || DEFAULT_UI_PORT;
 }
 
 /**
@@ -81,7 +84,8 @@ export async function startUiServer(webDist) {
     });
 
     server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
+    const preferredPort = Number(process.env.NIHA_UI_PORT) || DEFAULT_UI_PORT;
+    server.listen(preferredPort, '127.0.0.1', () => {
       const address = server?.address();
       port = typeof address === 'object' && address ? address.port : 0;
       resolve(undefined);

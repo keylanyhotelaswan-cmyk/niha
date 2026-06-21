@@ -17,12 +17,16 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
+import { useAuth } from '../lib/auth-context.js';
+import { useBranches } from '../lib/hooks.js';
+import { readPosBranchId } from '../lib/pos-store.js';
 import {
   getReceiptSettings,
+  hydrateReceiptSettingsFromServer,
   receiptLayoutFromSettings,
   resetReceiptSettings,
   sampleReceiptData,
-  saveReceiptSettings,
+  saveReceiptSettingsWithSync,
   type ReceiptSettings,
 } from '../lib/pos-receipt-settings.js';
 import {
@@ -76,7 +80,11 @@ function ReceiptPreview({ settings, mode }: { settings: ReceiptSettings; mode: '
 }
 
 export function ReceiptSettingsPage() {
+  const { accessToken } = useAuth();
+  const { data: branches = [] } = useBranches();
+  const branchId = readPosBranchId() || branches[0]?.id || '';
   const [settings, setSettings] = useState<ReceiptSettings>(() => getReceiptSettings());
+  const [loadingRemote, setLoadingRemote] = useState(false);
   const [previewTab, setPreviewTab] = useState<'customer' | 'kitchen'>('customer');
   const [savedMsg, setSavedMsg] = useState('');
   const [printMsg, setPrintMsg] = useState('');
@@ -92,23 +100,45 @@ export function ReceiptSettingsPage() {
     isPrintBridgeOnline().then(setBridgeOk);
   }, []);
 
-  const handleSave = () => {
-    const saved = saveReceiptSettings(settings);
+  useEffect(() => {
+    if (!branchId || !accessToken) return;
+    let cancelled = false;
+    setLoadingRemote(true);
+    hydrateReceiptSettingsFromServer(branchId, accessToken)
+      .then((remote) => {
+        if (!cancelled) setSettings(remote);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingRemote(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [branchId, accessToken]);
+
+  const syncOptions = useMemo(
+    () => ({ branchId, token: accessToken }),
+    [branchId, accessToken],
+  );
+
+  const handleSave = async () => {
+    const saved = await saveReceiptSettingsWithSync(settings, syncOptions);
     savePrinterName(saved.printerName);
     setSettings(saved);
-    setSavedMsg('تم حفظ إعدادات الفاتورة.');
+    setSavedMsg('تم حفظ إعدادات الفاتورة (محلي + سيرفر).');
     setTimeout(() => setSavedMsg(''), 3000);
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     const defaults = resetReceiptSettings();
-    setSettings(defaults);
+    const saved = await saveReceiptSettingsWithSync(defaults, syncOptions);
+    setSettings(saved);
     setSavedMsg('تمت إعادة الإعدادات الافتراضية.');
   };
 
   const handleTestPrint = async () => {
     setPrintMsg('');
-    const saved = saveReceiptSettings(settings);
+    const saved = await saveReceiptSettingsWithSync(settings, syncOptions);
     savePrinterName(saved.printerName);
     const sample = sampleReceiptData(saved);
     const kitchen = kitchenFromReceipt(sample);
@@ -137,10 +167,11 @@ export function ReceiptSettingsPage() {
       <Stack spacing={0.5}>
         <Typography variant="h5" fontWeight={800}>تخصيص الفاتورة والطباعة</Typography>
         <Typography color="text.secondary" variant="body2">
-          عدّل الشكل والمقاس — التغييرات تُطبَّق على نقطة البيع بعد الحفظ.
+          عدّل الشكل والمقاس — التغييرات تُحفظ على هذا الجهاز وعلى السيرفر بعد «حفظ الإعدادات».
         </Typography>
       </Stack>
 
+      {loadingRemote ? <Alert severity="info">جاري تحميل الإعدادات من السيرفر…</Alert> : null}
       {savedMsg ? <Alert severity="success">{savedMsg}</Alert> : null}
       {printMsg ? (
         <Alert severity={printMsg.includes('فشل') || printMsg.includes('غير') ? 'error' : 'success'}>

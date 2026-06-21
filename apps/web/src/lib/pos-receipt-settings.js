@@ -143,6 +143,39 @@ export function saveReceiptSettings(settings) {
 export function resetReceiptSettings() {
     return saveReceiptSettings({ ...DEFAULT_RECEIPT_SETTINGS });
 }
+export async function fetchReceiptSettingsFromServer(branchId, token) {
+    try {
+        const { apiGetBranchReceiptSettings } = await import('./api.js');
+        const res = await apiGetBranchReceiptSettings(branchId, token);
+        if (!res?.settings || typeof res.settings !== 'object')
+            return null;
+        return normalizeReceiptSettings(res.settings);
+    }
+    catch {
+        return null;
+    }
+}
+export async function saveReceiptSettingsWithSync(settings, sync) {
+    const saved = saveReceiptSettings(settings);
+    if (sync?.branchId && sync.token) {
+        try {
+            const { apiSaveBranchReceiptSettings } = await import('./api.js');
+            await apiSaveBranchReceiptSettings(sync.branchId, { _v: RECEIPT_SETTINGS_VERSION, ...saved }, sync.token);
+        }
+        catch (err) {
+            console.warn('[niha] failed to sync receipt settings to server', err);
+        }
+    }
+    return saved;
+}
+export async function hydrateReceiptSettingsFromServer(branchId, token) {
+    const remote = await fetchReceiptSettingsFromServer(branchId, token);
+    if (remote) {
+        saveReceiptSettings(remote);
+        return remote;
+    }
+    return getReceiptSettings();
+}
 export function receiptLayoutFromSettings(settings = getReceiptSettings()) {
     const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
     const printWidthPx = getReceiptPrintWidthPx(settings.paperWidthMm);

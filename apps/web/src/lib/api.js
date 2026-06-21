@@ -28,6 +28,12 @@ export async function apiCurrentShift(branchId, cashBoxId, token) {
 export async function apiTransfer(dto, token) {
     return apiPost('/treasury/transfer', dto, token);
 }
+export async function apiGetBranchReceiptSettings(branchId, token) {
+    return apiGet(`/branches/${branchId}/receipt-settings`, token);
+}
+export async function apiSaveBranchReceiptSettings(branchId, settings, token) {
+    return apiPut(`/branches/${branchId}/receipt-settings`, { settings }, token);
+}
 export async function apiCreateMovement(dto, token) {
     return apiPost('/treasury/movements', dto, token);
 }

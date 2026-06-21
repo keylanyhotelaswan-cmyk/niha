@@ -217,6 +217,7 @@ model Branch {
   vendorPayments    VendorPayment[]
   vendors           Vendor[]
   warehouses        Warehouse[]
+  receiptSettings   Json?
   operatingExpensePayments OperatingExpensePayment[]
 
   @@unique([organizationId, code])

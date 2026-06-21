@@ -17,7 +17,7 @@ import {
   useSuspendedOrders,
 } from '../../lib/hooks.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
-import { RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
+import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
 import {
   isShiftOrderUncollected,
   mapApiOrderToSavedOrder,
@@ -79,6 +79,11 @@ export function usePosWorkspace() {
     window.addEventListener(RECEIPT_SETTINGS_EVENT, onSettingsChange);
     return () => window.removeEventListener(RECEIPT_SETTINGS_EVENT, onSettingsChange);
   }, [permissions]);
+
+  useEffect(() => {
+    if (!effectiveBranchId || !accessToken) return;
+    hydrateReceiptSettingsFromServer(effectiveBranchId, accessToken).catch(() => {});
+  }, [effectiveBranchId, accessToken]);
   const { closeShift } = useShiftMutations();
 
   const operatorName = user?.fullName?.trim() || user?.username || 'مستخدم';

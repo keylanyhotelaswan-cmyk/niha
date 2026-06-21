@@ -60,6 +60,7 @@ async function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      partition: 'persist:niha',
     },
   });
 
