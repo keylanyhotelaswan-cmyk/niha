@@ -16,6 +16,7 @@ type SettingsCard = {
   description: string;
   path: string;
   permission?: string;
+  permissionAny?: string[];
   meta?: string;
 };
 
@@ -40,6 +41,18 @@ export function SettingsHubPage() {
       meta: `${receipt.paperWidthMm}mm · بالطول · هامش ${receipt.marginMm}mm · ${receipt.paperSize}`,
     },
     {
+      title: 'سجل النشاط',
+      description: 'سجل عام لكل الحركات — إنشاء وتعديل وإلغاء الفواتير وغيرها.',
+      path: '/settings/audit-log',
+      permission: 'treasury.manage',
+    },
+    {
+      title: 'العملاء',
+      description: 'سجل الزبائن، البحث بالهاتف، وتمييز العملاء الدائمين.',
+      path: '/customers',
+      permissionAny: ['customers.read', 'treasury.manage', 'pos.use'],
+    },
+    {
       title: 'المستخدمين والصلاحيات',
       description: 'إضافة مستخدمين، الأدوار، وحذف الحسابات.',
       path: '/settings/users',
@@ -47,7 +60,12 @@ export function SettingsHubPage() {
     },
   ];
 
-  const visible = cards.filter((c) => !c.permission || granted.includes(c.permission));
+  const visible = cards.filter((c) => {
+    const granted = permissions?.map((p: { code: string }) => p.code) ?? [];
+    if (c.permissionAny?.length) return c.permissionAny.some((code) => granted.includes(code));
+    if (!c.permission) return true;
+    return granted.includes(c.permission);
+  });
 
   return (
     <Stack spacing={2}>

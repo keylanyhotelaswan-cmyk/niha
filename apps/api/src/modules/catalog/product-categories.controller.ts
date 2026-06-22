@@ -17,7 +17,7 @@ export class ProductCategoriesController {
   }
 
   @Get()
-  @RequirePermissions('product-categories.read')
+  @RequirePermissions('pos.use', 'inventory.manage')
   findAll(@Query('branchId') branchId: string) {
     return this.productCategoriesService.findAll(branchId);
   }

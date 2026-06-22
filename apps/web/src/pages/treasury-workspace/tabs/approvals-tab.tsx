@@ -16,9 +16,17 @@ import {
   Typography,
 } from '@mui/material';
 import { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { SectionCard } from '../../shared.js';
 import { useAuth } from '../../../lib/auth-context.js';
-import { apiApproveTransaction, apiBatchApproveTransactions, apiRejectTransaction } from '../../../lib/api.js';
+import {
+  apiApproveOrderCancellation,
+  apiApproveTransaction,
+  apiBatchApproveTransactions,
+  apiListPendingCancellations,
+  apiRejectOrderCancellation,
+  apiRejectTransaction,
+} from '../../../lib/api.js';
 import { parseApiErrorBody } from '../../../lib/api-client.js';
 import { PaymentMethodCards } from '../components/payment-method-cards.js';
 
@@ -37,6 +45,42 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [rejectBusy, setRejectBusy] = useState(false);
+  const branchId = workspace?.context?.branch?.id ?? '';
+
+  const { data: pendingCancellations = [], refetch: refetchCancellations } = useQuery({
+    queryKey: ['pending-cancellations', branchId],
+    queryFn: async (): Promise<any[]> => {
+      const res = await apiListPendingCancellations(branchId, undefined, accessToken ?? undefined);
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return Array.isArray(res.data) ? res.data : [];
+    },
+    enabled: Boolean(accessToken && branchId),
+    staleTime: 15000,
+  });
+
+  const approveCancel = async (orderId: string) => {
+    if (!accessToken) return;
+    const res = await apiApproveOrderCancellation(orderId, accessToken);
+    if (res.ok) {
+      onMessage('تم اعتماد إلغاء الفاتورة.');
+      onRefresh();
+      refetchCancellations();
+    } else {
+      onMessage(parseApiErrorBody(res.body, 'فشل اعتماد الإلغاء'));
+    }
+  };
+
+  const rejectCancel = async (orderId: string) => {
+    if (!accessToken) return;
+    const res = await apiRejectOrderCancellation(orderId, undefined, accessToken);
+    if (res.ok) {
+      onMessage('تم رفض طلب الإلغاء — الفاتورة كما هي.');
+      onRefresh();
+      refetchCancellations();
+    } else {
+      onMessage(parseApiErrorBody(res.body, 'فشل رفض الإلغاء'));
+    }
+  };
 
   const allIds = useMemo(() => pending.map((p: any) => p.id), [pending]);
 
@@ -77,7 +121,7 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
     if (res.ok) {
       setRejectId(null);
       setRejectReason('');
-      onMessage('تم رفض التحصيل — الطلب عاد لغير محصل في نقطة البيع.');
+      onMessage('تم إرجاع الطلب لـ«غير محصل» في نقطة البيع — نفس الفاتورة بدون تكرار. يمكن للكاشير إعادة التحصيل أو إلغاء الفاتورة.');
       onRefresh();
     } else {
       onMessage(parseApiErrorBody(res.body, 'فشل الرفض — تحقق من الصلاحيات'));
@@ -175,7 +219,42 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
                   <TableCell>
                     <Stack direction="row" spacing={0.5}>
                       <Button size="small" onClick={() => approveOne(row.id)}>اعتماد</Button>
-                      <Button size="small" color="error" onClick={() => rejectOne(row.id)}>رفض</Button>
+                      <Button size="small" color="warning" onClick={() => rejectOne(row.id)}>إرجاع غير محصل</Button>
+                    </Stack>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+      </SectionCard>
+
+      <SectionCard title="طلبات إلغاء فواتير">
+        {pendingCancellations.length === 0 ? (
+          <Alert severity="info">لا توجد طلبات إلغاء بانتظارك.</Alert>
+        ) : (
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>الطلب</TableCell>
+                <TableCell>السبب</TableCell>
+                <TableCell>المبلغ</TableCell>
+                <TableCell />
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {pendingCancellations.map((row: any) => (
+                <TableRow key={row.id} hover>
+                  <TableCell>
+                    <Typography fontWeight={700}>{row.orderNumber}</Typography>
+                    {row.customerName ? <Typography variant="caption">{row.customerName}</Typography> : null}
+                  </TableCell>
+                  <TableCell>{row.cancellationReason ?? '—'}</TableCell>
+                  <TableCell sx={{ fontWeight: 800 }}>{Number(row.totalAmount).toLocaleString('en-US')} ج.م</TableCell>
+                  <TableCell>
+                    <Stack direction="row" spacing={0.5}>
+                      <Button size="small" color="error" onClick={() => approveCancel(row.id)}>اعتماد الإلغاء</Button>
+                      <Button size="small" onClick={() => rejectCancel(row.id)}>رفض</Button>
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -208,23 +287,25 @@ export function ApprovalsTab({ workspace, onRefresh, onMessage }: ApprovalsTabPr
     </Stack>
 
     <Dialog open={Boolean(rejectId)} onClose={() => !rejectBusy && setRejectId(null)} fullWidth maxWidth="xs">
-      <DialogTitle>رفض التحصيل</DialogTitle>
+      <DialogTitle>إرجاع لغير محصل</DialogTitle>
       <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          لن تُنشأ فاتورة جديدة — نفس الطلب يعود لتبويب «غير محصل» في نقطة البيع. يمكن للكاشير بعدها إعادة التحصيل أو إلغاء الفاتورة.
+        </Typography>
         <TextField
           autoFocus
           fullWidth
           multiline
           minRows={2}
-          label="سبب الرفض (اختياري)"
+          label="سبب (اختياري)"
           value={rejectReason}
           onChange={(e) => setRejectReason(e.target.value)}
-          sx={{ mt: 1 }}
         />
       </DialogContent>
       <DialogActions>
         <Button onClick={() => setRejectId(null)} disabled={rejectBusy}>إلغاء</Button>
-        <Button color="error" variant="contained" onClick={confirmReject} disabled={rejectBusy}>
-          تأكيد الرفض
+        <Button color="warning" variant="contained" onClick={confirmReject} disabled={rejectBusy}>
+          تأكيد الإرجاع
         </Button>
       </DialogActions>
     </Dialog>

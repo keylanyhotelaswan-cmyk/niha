@@ -8,6 +8,7 @@ export type ReceiptLine = {
   unitPrice: number;
   lineTotal: number;
   note?: string;
+  sauces?: string[];
 };
 
 export type ReceiptData = {
@@ -47,6 +48,7 @@ export type KitchenReceiptData = {
   createdAt: string;
 };
 
+import { customerItemNote, kitchenItemNote, parseItemNote } from './pos-order-sauces.js';
 import {
   getReceiptSettings,
   saveReceiptSettings as persistReceiptSettings,
@@ -121,11 +123,14 @@ export function kitchenFromReceipt(data: ReceiptData): KitchenReceiptData {
     ...(data.customerPhone ? { customerPhone: data.customerPhone } : {}),
     ...(data.customerAddress ? { customerAddress: data.customerAddress } : {}),
     ...(data.captainName ? { captainName: data.captainName } : {}),
-    items: data.items.map((i) => ({
-      name: i.name,
-      quantity: i.quantity,
-      ...(i.note ? { note: i.note } : {}),
-    })),
+    items: data.items.map((i) => {
+      const kitchenNote = kitchenItemNote(i.note ?? '', i.sauces ?? []);
+      return {
+        name: i.name,
+        quantity: i.quantity,
+        ...(kitchenNote ? { note: kitchenNote } : {}),
+      };
+    }),
     ...(data.note ? { note: data.note } : {}),
     createdAt: data.createdAt,
   };
@@ -144,7 +149,7 @@ export function buildReceiptFromSavedOrder(
     captainName?: string;
     discountAmount: string;
     orderNote: string;
-    items: Array<{ name: string; unitPrice: number; quantity: number; note?: string }>;
+    items: Array<{ name: string; unitPrice: number; quantity: number; note?: string; sauces?: string[] }>;
     createdAt: string;
     collectionStatus?: 'approved' | 'uncollected' | 'pending_approval';
   },
@@ -170,20 +175,27 @@ export function buildReceiptFromSavedOrder(
     orderNumber: order.code,
     ...(opts.shiftNumber ? { shiftNumber: opts.shiftNumber } : {}),
     orderType: order.orderType === 'eat-in' ? 'محلي' : 'تيك أواي',
-    customerName: order.ownerName,
+    ...(order.ownerName?.trim() ? { customerName: order.ownerName.trim() } : {}),
     ...(order.customerPhone ? { customerPhone: order.customerPhone } : {}),
     ...(order.customerAddress ? { customerAddress: order.customerAddress } : {}),
     ...(order.captainName ? { captainName: order.captainName } : {}),
     cashierName: opts.cashierName,
     paymentMethod: opts.paymentMethodLabel,
     isPaid,
-    items: order.items.map((i) => ({
-      name: i.name,
-      quantity: i.quantity,
-      unitPrice: i.unitPrice,
-      lineTotal: i.unitPrice * i.quantity,
-      ...(i.note ? { note: i.note } : {}),
-    })),
+    items: order.items.map((i) => {
+      const parsed = parseItemNote(i.note ?? '');
+      const sauces = i.sauces?.length ? i.sauces : parsed.sauces;
+      const userNote = i.sauces?.length ? (i.note ?? '').trim() : parsed.userNote;
+      const customerNote = customerItemNote(userNote, sauces);
+      return {
+        name: i.name,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice,
+        lineTotal: i.unitPrice * i.quantity,
+        ...(customerNote ? { note: customerNote } : {}),
+        ...(sauces.length ? { sauces } : {}),
+      };
+    }),
     subtotal: subtotal || order.total + discount,
     discount,
     total: order.total,
@@ -237,9 +249,16 @@ export async function printPosReceipt(
     renderKitchenReceiptPng,
   } = await import('./pos-receipt-render.js');
 
-  if (copies === 'kitchen' || copies === 'both') {
-    const kitchen = kitchenFromReceipt(data);
-    const kPng = await renderKitchenReceiptPng(kitchen);
+  const kitchen = kitchenFromReceipt(data);
+  const needKitchen = copies === 'kitchen' || copies === 'both';
+  const needCustomer = copies === 'customer' || copies === 'both';
+
+  const [kPng, cPng] = await Promise.all([
+    needKitchen ? renderKitchenReceiptPng(kitchen) : Promise.resolve(null),
+    needCustomer ? renderCustomerReceiptPng(data) : Promise.resolve(null),
+  ]);
+
+  if (needKitchen) {
     payloads.push({
       html: buildKitchenReceiptHtml(kitchen),
       label: 'kitchen',
@@ -252,8 +271,7 @@ export async function printPosReceipt(
     });
   }
 
-  if (copies === 'customer' || copies === 'both') {
-    const cPng = await renderCustomerReceiptPng(data);
+  if (needCustomer) {
     payloads.push({
       html: buildCustomerReceiptHtml(data),
       label: 'customer',

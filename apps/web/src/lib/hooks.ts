@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { apiCloseShift, apiGetCustomer, apiListCustomers } from './api.js';
 import { apiGet, apiPost, parseApiErrorBody } from './api-client.js';
 import { useAuth } from './auth-context.js';
+import { readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
 
 function token(accessToken: string | null | undefined) {
   return accessToken ?? undefined;
@@ -20,6 +22,7 @@ export function invalidatePosQueries(queryClient: ReturnType<typeof useQueryClie
   queryClient.invalidateQueries({ queryKey: ['orders-shift-closed'] });
   queryClient.invalidateQueries({ queryKey: ['orders-suspended'] });
   queryClient.invalidateQueries({ queryKey: ['shift-current'] });
+  queryClient.invalidateQueries({ queryKey: ['pos-catalog'] });
 }
 
 /** تحديث الكاش بعد فتح وردية — بدون إعادة جلب pos-context الثقيل */
@@ -50,16 +53,63 @@ export function patchPosCachesAfterAutoOpen(
   });
 }
 
-/** تحديث خفيف بعد إغلاق طلب / تحصيل — KPIs + قائمة الطلبات فقط */
-export async function refetchPosOrderData(
+/** تحديث خفيف بعد إغلاق طلب / تحصيل — بدون انتظار */
+export function refetchPosOrderData(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId?: string,
 ) {
   if (!shiftId) return;
-  await Promise.all([
-    queryClient.refetchQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftId) }),
-    queryClient.refetchQueries({ queryKey: POS_QUERY_KEYS.shiftClosed(shiftId) }),
-  ]);
+  void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftId) });
+  void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftClosed(shiftId) });
+}
+
+export function patchShiftOrderUncollected(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  orderId: string,
+) {
+  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
+    if (!old?.length) return old;
+    return old.map((order) =>
+      order.id === orderId
+        ? {
+            ...order,
+            collectionStatus: 'UNCOLLECTED',
+            paymentStatus: 'PENDING',
+          }
+        : order,
+    );
+  });
+}
+
+export function patchShiftOrderCollected(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  orderId: string,
+) {
+  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
+    if (!old?.length) return old;
+    return old.map((order) =>
+      order.id === orderId
+        ? {
+            ...order,
+            collectionStatus: 'PENDING_APPROVAL',
+            paymentStatus: 'PAID',
+          }
+        : order,
+    );
+  });
+}
+
+export function patchShiftOrderRemoved(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  orderId: string,
+) {
+  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
+    if (!old?.length) return old;
+    return old.filter((order) => order.id !== orderId);
+  });
 }
 
 export function useBranches() {
@@ -88,7 +138,7 @@ export function useCashBoxes(branchId?: string) {
   });
 }
 
-export function useCurrentShift(branchId?: string, cashBoxId?: string) {
+export function useCurrentShift(branchId?: string, cashBoxId?: string, enabled = true) {
   const { accessToken } = useAuth();
   return useQuery({
     queryKey: ['shift-current', branchId, cashBoxId],
@@ -97,13 +147,15 @@ export function useCurrentShift(branchId?: string, cashBoxId?: string) {
       if (!res.ok) throw new Error(res.body ?? res.error);
       return res.data;
     },
-    enabled: !!accessToken && !!branchId && !!cashBoxId,
+    enabled: enabled && !!accessToken && !!branchId && !!cashBoxId,
     refetchInterval: 120000,
+    staleTime: 60000,
   });
 }
 
 export function usePosContext() {
   const { accessToken } = useAuth();
+  const cached = readPosContextCache();
   return useQuery({
     queryKey: ['pos-context'],
     queryFn: async () => {
@@ -112,12 +164,39 @@ export function usePosContext() {
         const msg = res.body ?? res.error ?? `فشل تحميل سياق نقطة البيع (${res.status ?? 'network'})`;
         throw new Error(msg);
       }
+      writePosContextCache(res.data);
       return res.data;
     },
     enabled: !!accessToken,
-    staleTime: 60000,
+    staleTime: 120000,
     retry: false,
-    refetchOnWindowFocus: true,
+    refetchOnWindowFocus: false,
+    ...(cached != null ? { placeholderData: cached } : {}),
+  });
+}
+
+export type PosCatalogData = {
+  categories: unknown[];
+  products: unknown[];
+  sauces: Array<{ id: string; name: string; isAvailable?: boolean }>;
+  paymentMethods: Array<{ code: string; name: string }>;
+};
+
+export function usePosCatalog(branchId?: string) {
+  const { accessToken } = useAuth();
+  const cached = branchId ? readPosCatalogCache(branchId) as PosCatalogData | undefined : undefined;
+  return useQuery({
+    queryKey: ['pos-catalog', branchId],
+    queryFn: async () => {
+      const res = await apiGet<PosCatalogData>(`/shifts/pos-catalog?branchId=${branchId}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      const data = res.data ?? { categories: [], products: [], sauces: [], paymentMethods: [] };
+      if (branchId) writePosCatalogCache(branchId, data);
+      return data;
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 300000,
+    ...(cached ? { placeholderData: cached } : {}),
   });
 }
 
@@ -135,7 +214,7 @@ export function useShiftClosedOrders(shiftId?: string) {
   });
 }
 
-export function usePosShiftSummary(shiftId?: string) {
+export function usePosShiftSummary(shiftId?: string, initialSummary?: unknown) {
   const { accessToken } = useAuth();
   return useQuery({
     queryKey: ['pos-shift-summary', shiftId],
@@ -145,6 +224,7 @@ export function usePosShiftSummary(shiftId?: string) {
       return res.data;
     },
     enabled: !!accessToken && !!shiftId,
+    ...(initialSummary != null ? { initialData: initialSummary } : {}),
     staleTime: 15000,
   });
 }
@@ -280,6 +360,7 @@ export function useTreasuryWorkspace(
     },
     enabled: !!accessToken && !!branchId && !!cashBoxId,
     staleTime: 30000,
+    placeholderData: keepPreviousData,
   });
 }
 
@@ -305,12 +386,55 @@ export function useShiftMutations() {
     onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-closed', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
   });
   const closeShift = useMutation({
-    mutationFn: async (dto: { shiftId: string; countedCash: number; note?: string }) => {
-      const res = await apiPost('/shifts/close', dto, token(accessToken));
+    mutationFn: async (dto: {
+      shiftId: string;
+      countedCash: number;
+      note?: string;
+      handoffMode?: 'successor' | 'existing';
+      targetShiftId?: string;
+      successorCashBoxId?: string;
+      successorOpeningFloat?: number;
+    }) => {
+      const res = await apiCloseShift(dto, token(accessToken));
       if (!res.ok) throw new Error(parseApiErrorBody(res.body, res.error ?? 'فشل إغلاق الوردية'));
       return res.data;
     },
     onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-closed', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
   });
   return { openShift, closeShift };
+}
+
+export function useCustomers(branchId?: string, q?: string, regularOnly?: boolean) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['customers', branchId, q ?? '', regularOnly ? '1' : '0'],
+    queryFn: async () => {
+      const res = await apiListCustomers(
+        branchId!,
+        {
+          ...(q ? { q } : {}),
+          ...(regularOnly ? { regularOnly: true } : {}),
+          take: 80,
+        },
+        token(accessToken),
+      );
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? { items: [], total: 0 };
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 20_000,
+  });
+}
+
+export function useCustomerDetail(customerId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['customer', customerId],
+    queryFn: async () => {
+      const res = await apiGetCustomer(customerId!, token(accessToken) ?? undefined);
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!customerId,
+  });
 }

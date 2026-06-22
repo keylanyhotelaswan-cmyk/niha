@@ -1,6 +1,6 @@
 export const RECEIPT_SETTINGS_KEY = 'niha-receipt-settings';
 export const RECEIPT_SETTINGS_EVENT = 'niha-receipt-settings-changed';
-export const RECEIPT_SETTINGS_VERSION = 5;
+export const RECEIPT_SETTINGS_VERSION = 6;
 export const RECEIPT_DPI = 203;
 /** عرض CSS ثابت لورق 80mm — يمنع تكبير html2canvas إلى ~639px */
 export const RECEIPT_CSS_WIDTH_PX = 280;
@@ -44,6 +44,7 @@ export const DEFAULT_RECEIPT_SETTINGS = {
     cashierPrintingEnabled: true,
     printerName: 'XP-80C (copy 3)',
     paperSize: '',
+    deliveryDrivers: [],
 };
 function clamp(n, min, max) {
     return Math.min(max, Math.max(min, n));
@@ -70,7 +71,29 @@ export function normalizeReceiptSettings(raw) {
         cashierPrintingEnabled: r.cashierPrintingEnabled ?? d.cashierPrintingEnabled,
         printerName: String(r.printerName ?? d.printerName).trim() || d.printerName,
         paperSize: String(r.paperSize ?? d.paperSize).trim() || d.paperSize,
+        deliveryDrivers: Array.isArray(r.deliveryDrivers)
+            ? r.deliveryDrivers
+                .map((driver) => ({
+                name: String(driver?.name ?? '').trim(),
+                ...(String(driver?.phone ?? '').trim()
+                    ? { phone: String(driver.phone).trim() }
+                    : {}),
+            }))
+                .filter((driver) => driver.name)
+            : d.deliveryDrivers,
     };
+}
+function readStoredMeta() {
+    try {
+        const raw = localStorage.getItem(RECEIPT_SETTINGS_KEY);
+        if (!raw)
+            return { savedAt: 0 };
+        const parsed = JSON.parse(raw);
+        return { savedAt: Number(parsed._savedAt) || 0 };
+    }
+    catch {
+        return { savedAt: 0 };
+    }
 }
 function migrateReceiptSettings(stored) {
     const version = stored._v ?? 1;
@@ -116,6 +139,14 @@ function migrateReceiptSettings(stored) {
             cashierPrintingEnabled: true,
         };
     }
+    if (version < 6) {
+        patch = {
+            ...patch,
+            deliveryDrivers: Array.isArray(patch.deliveryDrivers)
+                ? patch.deliveryDrivers
+                : [],
+        };
+    }
     return normalizeReceiptSettings(patch);
 }
 export function getReceiptSettings() {
@@ -136,7 +167,8 @@ export function getReceiptSettings() {
 }
 export function saveReceiptSettings(settings) {
     const normalized = normalizeReceiptSettings(settings);
-    localStorage.setItem(RECEIPT_SETTINGS_KEY, JSON.stringify({ _v: RECEIPT_SETTINGS_VERSION, ...normalized }));
+    const savedAt = Date.now();
+    localStorage.setItem(RECEIPT_SETTINGS_KEY, JSON.stringify({ _v: RECEIPT_SETTINGS_VERSION, _savedAt: savedAt, ...normalized }));
     window.dispatchEvent(new CustomEvent(RECEIPT_SETTINGS_EVENT, { detail: normalized }));
     return normalized;
 }
@@ -144,12 +176,12 @@ export function resetReceiptSettings() {
     return saveReceiptSettings({ ...DEFAULT_RECEIPT_SETTINGS });
 }
 /** إعدادات خاصة بكل جهاز — لا تُرفع للسيرفر */
-const LOCAL_RECEIPT_SETTING_KEYS = ['printerName'];
+const LOCAL_RECEIPT_SETTING_KEYS = ['printerName', 'autoPrint'];
 function pickLocalReceiptSettings(settings) {
-    return { printerName: settings.printerName };
+    return { printerName: settings.printerName, autoPrint: settings.autoPrint };
 }
-function toServerReceiptPayload(settings) {
-    const payload = { _v: RECEIPT_SETTINGS_VERSION, ...settings };
+function toServerReceiptPayload(settings, savedAt) {
+    const payload = { _v: RECEIPT_SETTINGS_VERSION, _savedAt: savedAt, ...settings };
     for (const key of LOCAL_RECEIPT_SETTING_KEYS) {
         delete payload[key];
     }
@@ -167,7 +199,9 @@ export async function fetchReceiptSettingsFromServer(branchId, token) {
         const res = await apiGetBranchReceiptSettings(branchId, token);
         if (!res?.settings || typeof res.settings !== 'object')
             return null;
-        return normalizeReceiptSettings(res.settings);
+        const raw = res.settings;
+        const savedAt = Number(raw._savedAt) || 0;
+        return { settings: normalizeReceiptSettings(res.settings), savedAt };
     }
     catch {
         return null;
@@ -175,10 +209,11 @@ export async function fetchReceiptSettingsFromServer(branchId, token) {
 }
 export async function saveReceiptSettingsWithSync(settings, sync) {
     const saved = saveReceiptSettings(settings);
+    const { savedAt } = readStoredMeta();
     if (sync?.branchId && sync.token) {
         try {
             const { apiSaveBranchReceiptSettings } = await import('./api.js');
-            await apiSaveBranchReceiptSettings(sync.branchId, toServerReceiptPayload(saved), sync.token);
+            await apiSaveBranchReceiptSettings(sync.branchId, toServerReceiptPayload(saved, savedAt), sync.token);
         }
         catch (err) {
             console.warn('[niha] failed to sync receipt settings to server', err);
@@ -188,13 +223,19 @@ export async function saveReceiptSettingsWithSync(settings, sync) {
 }
 export async function hydrateReceiptSettingsFromServer(branchId, token) {
     const local = getReceiptSettings();
+    const { savedAt: localSavedAt } = readStoredMeta();
     const remote = await fetchReceiptSettingsFromServer(branchId, token);
-    if (remote) {
-        const merged = mergeReceiptSettings(local, remote);
-        saveReceiptSettings(merged);
-        return merged;
+    if (!remote)
+        return local;
+    if (localSavedAt >= remote.savedAt && localSavedAt > 0) {
+        if (localSavedAt > remote.savedAt) {
+            void saveReceiptSettingsWithSync(local, { branchId, token });
+        }
+        return local;
     }
-    return local;
+    const merged = mergeReceiptSettings(local, remote.settings);
+    saveReceiptSettings(merged);
+    return merged;
 }
 export function receiptLayoutFromSettings(settings = getReceiptSettings()) {
     const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);

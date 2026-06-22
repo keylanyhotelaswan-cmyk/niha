@@ -21,6 +21,7 @@ import { useAuth } from './lib/auth-context.js';
 
 const navigation = [
   { label: 'نقطة البيع', path: '/pos', hint: 'البيع والطلبات المعلقة', permission: 'pos.use' },
+  { label: 'العملاء', path: '/customers', hint: 'سجل الزبائن والعملاء الدائمين', permissionAny: ['customers.read', 'treasury.manage', 'pos.use'] as const },
   { label: 'الخزنة والورديات', path: '/shifts', hint: 'العهدة والتحصيل والاعتماد', permission: 'treasury.manage' },
   { label: 'الإعدادات', path: '/settings', hint: 'الفاتورة، الطباعة، والنظام', matchPrefix: true, permissionAny: ['treasury.manage', 'users.manage'] as const },
   { label: 'إدارة المستخدمين', path: '/settings/users', hint: 'أدرّ مستخدمي النظام', permission: 'users.manage' },
@@ -161,6 +162,7 @@ export function AppShell() {
     if (location.pathname.startsWith('/settings/users')) return 'إدارة المستخدمين';
     if (location.pathname.startsWith('/settings')) return 'الإعدادات';
     if (location.pathname.startsWith('/shifts')) return 'الخزنة والورديات';
+    if (location.pathname.startsWith('/customers')) return 'العملاء';
     return navigation.find((item) => item.path === location.pathname)?.label ?? 'نقطة البيع';
   }, [location.pathname]);
 

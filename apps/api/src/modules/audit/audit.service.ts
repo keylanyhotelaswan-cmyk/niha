@@ -62,23 +62,63 @@ export class AuditService {
         createdAt: 'desc',
       },
       take: limit,
-      include: {
-        actorUser: {
-          select: {
-            id: true,
-            fullName: true,
-            username: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            name: true,
-            code: true,
-          },
+      include: this.listInclude(),
+    });
+  }
+
+  async findFiltered(params: {
+    organizationId: string;
+    branchId?: string;
+    entityType?: string;
+    action?: string;
+    from?: string;
+    to?: string;
+    limit?: number;
+  }) {
+    const createdAt: { gte?: Date; lte?: Date } = {};
+    if (params.from) {
+      const from = new Date(params.from);
+      if (!Number.isNaN(from.getTime())) createdAt.gte = from;
+    }
+    if (params.to) {
+      const to = new Date(params.to);
+      if (!Number.isNaN(to.getTime())) {
+        to.setHours(23, 59, 59, 999);
+        createdAt.lte = to;
+      }
+    }
+
+    return this.prisma.auditLog.findMany({
+      where: {
+        organizationId: params.organizationId,
+        ...(params.branchId ? { branchId: params.branchId } : {}),
+        ...(params.entityType ? { entityType: params.entityType as any } : {}),
+        ...(params.action ? { action: params.action as any } : {}),
+        ...(Object.keys(createdAt).length ? { createdAt } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: params.limit ?? 150,
+      include: this.listInclude(),
+    });
+  }
+
+  private listInclude() {
+    return {
+      actorUser: {
+        select: {
+          id: true,
+          fullName: true,
+          username: true,
         },
       },
-    });
+      branch: {
+        select: {
+          id: true,
+          name: true,
+          code: true,
+        },
+      },
+    } as const;
   }
 
   async findByUser(organizationId: string, actorUserId: string, limit = 100) {

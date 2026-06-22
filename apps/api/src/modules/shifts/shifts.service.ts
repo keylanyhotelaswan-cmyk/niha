@@ -63,15 +63,13 @@ export class ShiftsService {
     });
 
     if (openShift) {
-      const summary = await this.treasuryService.getShiftSummary(openShift.id);
-      const posSummary = await this.getPosShiftSummary(openShift.id);
       return {
         branch: { id: branch.id, name: branch.name },
         cashBox: { id: openShift.cashBox.id, name: openShift.cashBox.name },
         shiftOpen: true,
         shift: openShift,
-        summary,
-        posSummary,
+        summary: null,
+        posSummary: null,
       };
     }
 
@@ -238,12 +236,56 @@ export class ShiftsService {
     });
   }
 
+  async getHandoffOptions(shiftId: string) {
+    const shift = await this.prisma.shift.findUnique({
+      where: { id: shiftId },
+      include: { cashBox: true, openedBy: true },
+    });
+    if (!shift) {
+      throw new NotFoundException('الوردية غير موجودة');
+    }
+
+    const pending = await this.countTransferableOrders(shiftId);
+    const openShifts = await this.prisma.shift.findMany({
+      where: { branchId: shift.branchId, status: 'OPEN', id: { not: shiftId } },
+      include: { openedBy: true, cashBox: true },
+      orderBy: { openedAt: 'desc' },
+    });
+    const cashBoxes = await this.prisma.cashBox.findMany({
+      where: { branchId: shift.branchId },
+      orderBy: { code: 'asc' },
+    });
+
+    return {
+      shift: {
+        id: shift.id,
+        shiftNumber: shift.shiftNumber,
+        cashBoxId: shift.cashBoxId,
+        cashBoxName: shift.cashBox.name,
+        cashierName: shift.openedBy.fullName,
+      },
+      pending,
+      openShifts: openShifts.map((s) => ({
+        id: s.id,
+        shiftNumber: s.shiftNumber,
+        cashierName: s.openedBy.fullName,
+        cashBoxId: s.cashBoxId,
+        cashBoxName: s.cashBox.name,
+        openedAt: s.openedAt.toISOString(),
+      })),
+      cashBoxes: cashBoxes.map((c) => ({ id: c.id, name: c.name, code: c.code })),
+    };
+  }
+
   async closeShift(closeDto: CloseShiftDto, userId: string) {
     if (!userId) {
       throw new BadRequestException('لم يتم التعرف على المستخدم');
     }
 
-    const shiftRecord = await this.prisma.shift.findUnique({ where: { id: closeDto.shiftId } });
+    const shiftRecord = await this.prisma.shift.findUnique({
+      where: { id: closeDto.shiftId },
+      include: { cashBox: true },
+    });
     if (!shiftRecord) {
       throw new NotFoundException('الوردية غير موجودة');
     }
@@ -256,10 +298,59 @@ export class ShiftsService {
       throw new BadRequestException('لا يمكنك إغلاق وردية مستخدم آخر');
     }
 
+    const branch = await this.prisma.branch.findUnique({ where: { id: shiftRecord.branchId } });
+    if (!branch) {
+      throw new NotFoundException('الفرع غير موجود');
+    }
+
+    const pending = await this.countTransferableOrders(closeDto.shiftId);
+    const needsHandoff = pending.total > 0;
+
+    if (needsHandoff && !closeDto.handoffMode) {
+      throw new BadRequestException(
+        `يوجد ${pending.uncollectedCount} طلب لم يُحصّل${pending.suspendedCount ? ` و${pending.suspendedCount} معلّق` : ''}. اختر «تسليم وردية» لنقلها قبل الإغلاق.`,
+      );
+    }
+
+    let targetShiftId: string | null = null;
+    let targetCashBoxId: string | null = null;
+    let targetShiftNumber: string | null = null;
+
+    if (closeDto.handoffMode === 'existing') {
+      if (!closeDto.targetShiftId) {
+        throw new BadRequestException('حدد وردية المستلم');
+      }
+      const target = await this.prisma.shift.findUnique({
+        where: { id: closeDto.targetShiftId },
+        include: { cashBox: true },
+      });
+      if (!target || target.status !== 'OPEN') {
+        throw new BadRequestException('وردية المستلم غير متاحة');
+      }
+      if (target.branchId !== shiftRecord.branchId) {
+        throw new BadRequestException('يجب أن تكون وردية المستلم في نفس الفرع');
+      }
+      if (target.id === closeDto.shiftId) {
+        throw new BadRequestException('لا يمكن التسليم لنفس الوردية');
+      }
+      targetShiftId = target.id;
+      targetCashBoxId = target.cashBoxId;
+      targetShiftNumber = target.shiftNumber;
+    } else if (closeDto.handoffMode === 'successor') {
+      targetCashBoxId = closeDto.successorCashBoxId ?? shiftRecord.cashBoxId;
+      const conflict = await this.prisma.shift.findFirst({
+        where: { cashBoxId: targetCashBoxId, status: 'OPEN', id: { not: closeDto.shiftId } },
+      });
+      if (conflict) {
+        throw new BadRequestException('توجد وردية مفتوحة على الخزنة المختارة — اختر وردية مفتوحة أخرى أو خزنة مختلفة');
+      }
+    }
+
     const closedAt = new Date();
     const summary = await this.treasuryService.getShiftSummary(closeDto.shiftId);
+    const handoffNote = closeDto.note?.trim() ?? null;
 
-    return this.prisma.$transaction(async (tx) => {
+    const txResult = await this.prisma.$transaction(async (tx) => {
       const shift = await tx.shift.update({
         where: { id: closeDto.shiftId },
         data: { status: 'CLOSED', closedAt },
@@ -273,12 +364,185 @@ export class ShiftsService {
           expectedCash: summary.expectedCash,
           countedCash: closeDto.countedCash,
           varianceAmount: closeDto.countedCash - summary.expectedCash,
-          note: closeDto.note ?? null,
+          note: handoffNote,
         },
       });
 
-      return { shift, closing, summary };
+      let successor: typeof shift | null = null;
+      let transferredCount = 0;
+
+      if (closeDto.handoffMode === 'successor') {
+        const openingFloat = closeDto.successorOpeningFloat ?? closeDto.countedCash;
+        const shiftNumber = await this.sequenceService.getNextNumber(
+          branch.organizationId,
+          'SHIFT',
+          shiftRecord.branchId,
+        );
+        successor = await tx.shift.create({
+          data: {
+            branchId: shiftRecord.branchId,
+            cashBoxId: targetCashBoxId!,
+            openedById: userId,
+            shiftNumber,
+            openedAt: closedAt,
+            openingFloat,
+          },
+          include: { cashBox: true, openedBy: true },
+        });
+        await tx.shiftOpening.create({
+          data: {
+            shiftId: successor.id,
+            createdById: userId,
+            amount: openingFloat,
+            note: `تسليم من وردية ${shiftRecord.shiftNumber}`,
+          },
+        });
+        targetShiftId = successor.id;
+        targetShiftNumber = successor.shiftNumber;
+      }
+
+      if (closeDto.handoffMode && targetShiftId && targetCashBoxId && pending.total > 0) {
+        transferredCount = await this.transferPendingOrders({
+          tx,
+          sourceShiftId: closeDto.shiftId,
+          targetShiftId,
+          targetCashBoxId,
+          branchId: shiftRecord.branchId,
+          organizationId: branch.organizationId,
+        });
+      }
+
+      if (transferredCount > 0 && targetShiftNumber) {
+        await tx.shiftClosing.update({
+          where: { id: closing.id },
+          data: {
+            note: [
+              handoffNote,
+              `تسليم ${transferredCount} طلب/سلة إلى وردية ${targetShiftNumber}`,
+            ].filter(Boolean).join(' · '),
+          },
+        });
+      }
+
+      return { shift, closing, successor, transferredCount };
     });
+
+    if (txResult.successor) {
+      const openingFloat = closeDto.successorOpeningFloat ?? closeDto.countedCash;
+      if (openingFloat > 0) {
+        await this.treasuryService.recordTransaction({
+          branchId: shiftRecord.branchId,
+          cashBoxId: txResult.successor.cashBoxId,
+          shiftId: txResult.successor.id,
+          transactionType: 'SHIFT_OPEN_FLOAT',
+          paymentMethod: 'CASH',
+          amount: openingFloat,
+          sourceType: 'SHIFT',
+          sourceId: txResult.successor.id,
+          note: `تسليم عهدة من وردية ${shiftRecord.shiftNumber}`,
+          approvalStatus: 'APPROVED',
+          collectionStatus: 'APPROVED',
+          affectsCash: true,
+        });
+      }
+    }
+
+    return {
+      shift: txResult.shift,
+      closing: txResult.closing,
+      summary,
+      successorShift: txResult.successor,
+      handoff: closeDto.handoffMode
+        ? {
+            mode: closeDto.handoffMode,
+            targetShiftId,
+            targetShiftNumber,
+            transferredCount: txResult.transferredCount,
+          }
+        : null,
+    };
+  }
+
+  private async countTransferableOrders(shiftId: string) {
+    const uncollectedWhere = {
+      shiftId,
+      status: 'CLOSED' as const,
+      OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
+    };
+    const [uncollectedCount, suspendedCount, openCount] = await Promise.all([
+      this.prisma.order.count({ where: uncollectedWhere }),
+      this.prisma.order.count({ where: { shiftId, status: 'SUSPENDED' } }),
+      this.prisma.order.count({ where: { shiftId, status: 'OPEN' } }),
+    ]);
+    return {
+      uncollectedCount,
+      suspendedCount,
+      openCount,
+      total: uncollectedCount + suspendedCount + openCount,
+    };
+  }
+
+  private async transferPendingOrders(params: {
+    tx: Prisma.TransactionClient;
+    sourceShiftId: string;
+    targetShiftId: string;
+    targetCashBoxId: string;
+    branchId: string;
+    organizationId: string;
+  }) {
+    const pendingWhere: Prisma.OrderWhereInput = {
+      shiftId: params.sourceShiftId,
+      OR: [
+        { status: 'SUSPENDED' },
+        { status: 'OPEN' },
+        {
+          status: 'CLOSED',
+          OR: [{ collectionStatus: 'UNCOLLECTED' }, { paymentStatus: 'PENDING' }],
+        },
+      ],
+    };
+
+    const orders = await params.tx.order.findMany({
+      where: pendingWhere,
+      select: { id: true, orderNumber: true },
+    });
+    if (!orders.length) return 0;
+
+    const existingNumbers = new Set(
+      (
+        await params.tx.order.findMany({
+          where: { shiftId: params.targetShiftId },
+          select: { orderNumber: true },
+        })
+      ).map((o) => o.orderNumber),
+    );
+
+    for (const order of orders) {
+      let orderNumber = order.orderNumber;
+      if (existingNumbers.has(orderNumber)) {
+        orderNumber = await this.sequenceService.getNextShiftOrderNumber(
+          params.organizationId,
+          params.branchId,
+          params.targetShiftId,
+        );
+      }
+      existingNumbers.add(orderNumber);
+
+      await params.tx.order.update({
+        where: { id: order.id },
+        data: {
+          shiftId: params.targetShiftId,
+          cashBoxId: params.targetCashBoxId,
+          orderNumber,
+        },
+      });
+      await params.tx.orderPayment.updateMany({
+        where: { orderId: order.id },
+        data: { shiftId: params.targetShiftId },
+      });
+    }
+
+    return orders.length;
   }
 
   async currentShiftForCashBox(branchId: string, cashBoxId: string, userId?: string) {
@@ -304,24 +568,96 @@ export class ShiftsService {
     return { shiftOpen: true, shift, summary };
   }
 
-  async getPosShiftSummary(shiftId: string) {
-    const shift = await this.prisma.shift.findUnique({
-      where: { id: shiftId },
-      include: { openedBy: true, cashBox: true },
-    });
+  async getPosShiftSummary(shiftId: string, opts?: { includeOrders?: boolean }) {
+    const includeOrders = opts?.includeOrders !== false;
+
+    const [shift, treasurySummary, expenses] = await Promise.all([
+      this.prisma.shift.findUnique({
+        where: { id: shiftId },
+        include: { openedBy: true, cashBox: true },
+      }),
+      this.treasuryService.getShiftSummary(shiftId),
+      this.prisma.cashierExpense.findMany({
+        where: { shiftId },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
     if (!shift) {
       throw new NotFoundException('Shift not found');
     }
 
-    const treasurySummary = await this.treasuryService.getShiftSummary(shiftId);
-
-    const expenses = await this.prisma.cashierExpense.findMany({
-      where: { shiftId },
-      orderBy: { createdAt: 'desc' },
-    });
     const expensesTotal = expenses.reduce((s, e) => s + Number(e.amount), 0);
     const expensesGeneral = expenses.filter((e) => e.kind === 'GENERAL').reduce((s, e) => s + Number(e.amount), 0);
     const expensesItems = expenses.filter((e) => e.kind === 'ITEM').reduce((s, e) => s + Number(e.amount), 0);
+
+    let collectedApproved = 0;
+    let collectedPending = 0;
+    for (const tx of treasurySummary.transactions) {
+      if (tx.transactionType !== 'SALE_RECEIPT') continue;
+      const amount = Number(tx.amount);
+      if (tx.approvalStatus === 'APPROVED') collectedApproved += amount;
+      else if (tx.approvalStatus === 'PENDING') collectedPending += amount;
+    }
+
+    const base = {
+      shift,
+      openingFloat: treasurySummary.openingFloat,
+      salesTotal: treasurySummary.totalSales,
+      collectedApproved,
+      collectedPending,
+      expensesTotal,
+      expensesGeneral,
+      expensesItems,
+      expenses,
+      expectedCash: treasurySummary.expectedCash,
+      pendingCashInCustody: treasurySummary.pendingCashInCustody,
+      incoming: treasurySummary.incoming,
+      outgoing: treasurySummary.outgoing,
+      byPaymentMethod: treasurySummary.byPaymentMethod,
+      salesByMethod: treasurySummary.salesByMethod,
+    };
+
+    if (!includeOrders) {
+      const uncollectedWhere = {
+        shiftId,
+        status: 'CLOSED' as const,
+        OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
+      };
+      const [ordersCount, salesAgg, uncollectedAgg, uncollectedOrdersRaw, suspendedCount] = await Promise.all([
+        this.prisma.order.count({ where: { shiftId, status: 'CLOSED' } }),
+        this.prisma.order.aggregate({
+          where: { shiftId, status: 'CLOSED' },
+          _sum: { totalAmount: true },
+        }),
+        this.prisma.order.aggregate({
+          where: uncollectedWhere,
+          _sum: { totalAmount: true },
+          _count: true,
+        }),
+        this.prisma.order.findMany({
+          where: uncollectedWhere,
+          select: { orderNumber: true, totalAmount: true, customerName: true },
+          orderBy: { closedAt: 'desc' },
+          take: 25,
+        }),
+        this.prisma.order.count({ where: { shiftId, status: 'SUSPENDED' } }),
+      ]);
+
+      return {
+        ...base,
+        ordersCount,
+        salesTotal: Number(salesAgg._sum.totalAmount ?? 0),
+        suspendedCount,
+        shiftClosedOrders: [],
+        uncollectedCount: uncollectedAgg._count,
+        uncollectedTotal: Number(uncollectedAgg._sum.totalAmount ?? 0),
+        uncollectedOrders: uncollectedOrdersRaw.map((o) => ({
+          orderNumber: o.orderNumber,
+          total: Number(o.totalAmount),
+          customerName: o.customerName,
+        })),
+      };
+    }
 
     const posOrderSelect = {
       id: true,
@@ -337,8 +673,11 @@ export class ShiftsService {
       collectionStatus: true,
       paymentStatus: true,
       status: true,
+      cancelRequestedAt: true,
+      cancellationReason: true,
       closedAt: true,
       openedAt: true,
+      createdBy: { select: { fullName: true, username: true } },
       items: { include: { product: true } },
     } as const;
 
@@ -367,8 +706,10 @@ export class ShiftsService {
     let ordersCount = 0;
     let salesTotal = 0;
     let uncollectedTotal = 0;
+    let uncollectedCount = 0;
     let suspendedCount = 0;
     const shiftClosedOrders: typeof orders = [];
+    const uncollectedOrdersList: Array<{ orderNumber: string; total: number; customerName: string | null }> = [];
 
     for (const order of orders) {
       if (order.status === 'SUSPENDED') {
@@ -382,37 +723,81 @@ export class ShiftsService {
       salesTotal += amount;
       if (isUncollectedOrder(order)) {
         uncollectedTotal += amount;
+        uncollectedCount += 1;
+        uncollectedOrdersList.push({
+          orderNumber: order.orderNumber,
+          total: amount,
+          customerName: order.customerName,
+        });
       }
     }
 
-    let collectedApproved = 0;
-    let collectedPending = 0;
+    let collectedApprovedFull = 0;
+    let collectedPendingFull = 0;
     for (const tx of treasurySummary.transactions) {
       if (tx.transactionType !== 'SALE_RECEIPT') continue;
       const amount = Number(tx.amount);
-      if (tx.approvalStatus === 'APPROVED') collectedApproved += amount;
-      else if (tx.approvalStatus === 'PENDING') collectedPending += amount;
+      if (tx.approvalStatus === 'APPROVED') collectedApprovedFull += amount;
+      else if (tx.approvalStatus === 'PENDING') collectedPendingFull += amount;
     }
 
     return {
-      shift,
-      openingFloat: treasurySummary.openingFloat,
-      salesTotal: treasurySummary.totalSales,
+      ...base,
       ordersCount,
+      salesTotal,
       suspendedCount,
       shiftClosedOrders,
-      collectedApproved,
-      collectedPending,
+      collectedApproved: collectedApprovedFull,
+      collectedPending: collectedPendingFull,
       uncollectedTotal,
-      expensesTotal,
-      expensesGeneral,
-      expensesItems,
-      expenses,
-      expectedCash: treasurySummary.expectedCash,
-      pendingCashInCustody: treasurySummary.pendingCashInCustody,
-      incoming: treasurySummary.incoming,
-      outgoing: treasurySummary.outgoing,
-      byPaymentMethod: treasurySummary.byPaymentMethod,
+      uncollectedCount,
+      uncollectedOrders: uncollectedOrdersList.slice(0, 25),
+    };
+  }
+
+  async getPosCatalog(branchId: string) {
+    const [categories, products, paymentMethods] = await Promise.all([
+      this.prisma.productCategory.findMany({
+        where: { branchId },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.product.findMany({
+        where: { branchId },
+        orderBy: { name: 'asc' },
+      }),
+      this.prisma.paymentMethod.findMany({
+        where: { branchId, isActive: true },
+        orderBy: { sortOrder: 'asc' },
+      }),
+    ]);
+
+    const mappedProducts = products.map((product) => ({
+      id: product.id,
+      branchId: product.branchId,
+      categoryId: product.categoryId,
+      name: product.name,
+      sku: product.sku,
+      salePrice: Number(product.salePrice),
+      estimatedCost: product.estimatedCost ? Number(product.estimatedCost) : null,
+      isAvailable: product.isAvailable,
+      createdAt: product.createdAt,
+    }));
+
+    const sauceCategoryIds = new Set(
+      categories.filter((c) => c.name.includes('صوص')).map((c) => c.id),
+    );
+    const sauces = mappedProducts.filter(
+      (p) => sauceCategoryIds.has(p.categoryId) || (p.sku?.startsWith('NY-SAU-') ?? false),
+    );
+    const menuProducts = mappedProducts.filter(
+      (p) => !sauceCategoryIds.has(p.categoryId) && !(p.sku?.startsWith('NY-SAU-') ?? false),
+    );
+
+    return {
+      categories,
+      products: menuProducts,
+      sauces,
+      paymentMethods,
     };
   }
 }

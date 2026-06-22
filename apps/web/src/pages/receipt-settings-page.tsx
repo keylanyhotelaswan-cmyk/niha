@@ -261,6 +261,53 @@ export function ReceiptSettingsPage() {
 
             <Divider sx={{ my: 3 }} />
 
+            <Typography variant="h6" fontWeight={800} gutterBottom>سائقو الدليفري</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+              أضف الأسماء هنا لتظهر كقائمة منسدلة في طلبات التيك أواي.
+            </Typography>
+            <Stack spacing={1.25}>
+              {(settings.deliveryDrivers ?? []).map((driver, index) => (
+                <Stack key={index} direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="الاسم"
+                    value={driver.name}
+                    onChange={(e) => {
+                      const next = [...settings.deliveryDrivers];
+                      next[index] = { ...next[index], name: e.target.value };
+                      patch({ deliveryDrivers: next });
+                    }}
+                  />
+                  <TextField
+                    fullWidth
+                    size="small"
+                    label="هاتف (اختياري)"
+                    value={driver.phone ?? ''}
+                    onChange={(e) => {
+                      const next = [...settings.deliveryDrivers];
+                      next[index] = { ...next[index], name: next[index]?.name ?? '', phone: e.target.value };
+                      patch({ deliveryDrivers: next });
+                    }}
+                  />
+                  <Button
+                    color="error"
+                    onClick={() => patch({ deliveryDrivers: settings.deliveryDrivers.filter((_, i) => i !== index) })}
+                  >
+                    حذف
+                  </Button>
+                </Stack>
+              ))}
+              <Button
+                variant="outlined"
+                onClick={() => patch({ deliveryDrivers: [...settings.deliveryDrivers, { name: '' }] })}
+              >
+                + إضافة سائق
+              </Button>
+            </Stack>
+
+            <Divider sx={{ my: 3 }} />
+
             <Typography variant="h6" fontWeight={800} gutterBottom>الطباعة</Typography>
             <Stack spacing={2}>
               <TextField

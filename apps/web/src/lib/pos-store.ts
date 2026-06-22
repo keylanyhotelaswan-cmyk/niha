@@ -1,9 +1,14 @@
+import { parseItemNote } from './pos-order-sauces.js';
+import { formatOrderTimestamp } from './date-utils.js';
+import { isValidCustomerPhone } from './customer-phone.js';
+
 export type CartItem = {
   productId: string;
   name: string;
   unitPrice: number;
   quantity: number;
   note: string;
+  sauces?: string[];
 };
 
 export type OrderType = 'eat-in' | 'takeaway';
@@ -27,6 +32,10 @@ export type SavedOrder = {
   createdAt: string;
   status: 'suspended' | 'closed' | 'open';
   collectionStatus: CollectionStatus;
+  cancelRequestedAt?: string;
+  cancellationReason?: string;
+  createdByName?: string;
+  orderAt?: string;
 };
 
 export function isShiftOrderUncollected(order: SavedOrder) {
@@ -64,7 +73,27 @@ export function defaultOwnerName(orderType: OrderType) {
   return orderType === 'eat-in' ? 'عميل الصالة' : 'عميل تيك أواي';
 }
 
-export function getCollectionStatusLabel(status: CollectionStatus) {
+/** حقول التيك أواي المطلوبة قبل التأكيد */
+export function validateTakeawayOrderFields(
+  orderType: OrderType,
+  customerName: string,
+  customerPhone: string,
+): { ok: true } | { ok: false; error: string; missingLabels: string[] } {
+  if (orderType !== 'takeaway') return { ok: true };
+  const missingLabels: string[] = [];
+  if (!customerName.trim()) missingLabels.push('اسم العميل');
+  if (!customerPhone.trim()) missingLabels.push('رقم التلفون');
+  else if (!isValidCustomerPhone(customerPhone)) missingLabels.push('رقم تلفون صحيح');
+  if (missingLabels.length === 0) return { ok: true };
+  return {
+    ok: false,
+    missingLabels,
+    error: `أكمل بيانات التيك أواي: ${missingLabels.join(' · ')}`,
+  };
+}
+
+export function getCollectionStatusLabel(status: CollectionStatus, cancelPending?: boolean) {
+  if (cancelPending) return 'طلب إلغاء — بانتظار المدير';
   if (status === 'approved') return 'تم التحصيل';
   if (status === 'pending_approval') return 'تم التحصيل — بانتظار اعتماد الخزنة';
   return 'لم يُحصّل';
@@ -90,8 +119,25 @@ export function mapOrderTypeToApi(orderType: OrderType): 'DINE_IN' | 'TAKEAWAY' 
   return orderType === 'eat-in' ? 'DINE_IN' : 'TAKEAWAY';
 }
 
+function resolveOrderItemNote(item: {
+  note?: string | null;
+  notes?: Array<{ note?: string | null }>;
+}) {
+  const direct = item.note?.trim();
+  if (direct) return direct;
+  const fromNotes = (item.notes ?? [])
+    .map((n) => n.note?.trim())
+    .filter(Boolean)
+    .join('\n');
+  return fromNotes;
+}
+
 export function mapApiOrderType(orderType: string): OrderType {
   return orderType === 'TAKEAWAY' ? 'takeaway' : 'eat-in';
+}
+
+function resolveCreatorName(createdBy?: { fullName?: string | null; username?: string | null } | null) {
+  return createdBy?.fullName?.trim() || createdBy?.username?.trim() || '';
 }
 
 export function mapApiOrderToSavedOrder(
@@ -104,16 +150,21 @@ export function mapApiOrderToSavedOrder(
     customerPhone?: string | null;
     customerAddress?: string | null;
     captainName?: string | null;
+    cancelRequestedAt?: string | Date | null;
+    cancellationReason?: string | null;
     paymentStatus?: string;
     discountAmount?: unknown;
     note?: string | null;
     collectionStatus?: string;
     closedAt?: string | Date | null;
     openedAt?: string | Date | null;
+    createdBy?: { fullName?: string | null; username?: string | null } | null;
     items?: Array<{
       productId: string;
       unitPrice: unknown;
       quantity: unknown;
+      note?: string | null;
+      notes?: Array<{ note?: string | null }>;
       product?: { name?: string } | null;
     }>;
   },
@@ -121,31 +172,46 @@ export function mapApiOrderToSavedOrder(
 ): SavedOrder {
   const orderType = mapApiOrderType(order.orderType);
   const at = order.closedAt ?? order.openedAt;
+  const createdByName = resolveCreatorName(order.createdBy);
+  const orderAt = formatOrderTimestamp(at);
   return {
     id: order.id,
     code: order.orderNumber,
     orderType,
     total: Number(order.totalAmount),
     itemsCount: order.items?.length ?? 0,
-    ownerName: order.customerName ?? defaultOwnerName(orderType),
+    ownerName: order.customerName?.trim() ?? '',
     ...(order.customerPhone ? { customerPhone: order.customerPhone } : {}),
     ...(order.customerAddress ? { customerAddress: order.customerAddress } : {}),
     ...(order.captainName ? { captainName: order.captainName } : {}),
+    ...(createdByName ? { createdByName } : {}),
+    ...(orderAt ? { orderAt } : {}),
     paymentMethod: 'cash',
     ...(order.paymentStatus === 'PENDING' || order.paymentStatus === 'PAID' || order.paymentStatus === 'VOIDED'
       ? { paymentStatus: order.paymentStatus }
       : {}),
     discountAmount: String(order.discountAmount ?? 0),
     orderNote: order.note ?? '',
-    items: (order.items ?? []).map((item) => ({
-      productId: item.productId,
-      name: item.product?.name ?? 'صنف',
-      unitPrice: Number(item.unitPrice),
-      quantity: Number(item.quantity),
-      note: '',
-    })),
-    createdAt: at ? new Date(at).toLocaleString('ar-EG') : '',
+    items: (order.items ?? []).map((item) => {
+      const rawNote = resolveOrderItemNote(item);
+      const parsed = parseItemNote(rawNote);
+      return {
+        productId: item.productId,
+        name: item.product?.name ?? 'صنف',
+        unitPrice: Number(item.unitPrice),
+        quantity: Number(item.quantity),
+        note: parsed.userNote,
+        sauces: parsed.sauces,
+      };
+    }),
+    createdAt: orderAt || (at ? new Date(at).toLocaleString('ar-EG') : ''),
     status,
     collectionStatus: mapCollectionStatus(order.collectionStatus),
+    ...(order.cancelRequestedAt
+      ? {
+          cancelRequestedAt: new Date(order.cancelRequestedAt).toLocaleString('ar-EG'),
+          ...(order.cancellationReason ? { cancellationReason: order.cancellationReason } : {}),
+        }
+      : {}),
   };
 }

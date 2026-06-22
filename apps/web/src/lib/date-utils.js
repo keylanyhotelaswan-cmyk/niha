@@ -22,6 +22,23 @@ export function isTodayRange(fromKey, toKey) {
     const today = localTodayKey();
     return fromKey === today && toKey === today;
 }
+/** وقت الطلب — اليوم: الساعة فقط، غير ذلك: تاريخ + ساعة */
+export function formatOrderTimestamp(at) {
+    if (!at)
+        return '';
+    const d = new Date(at);
+    if (Number.isNaN(d.getTime()))
+        return '';
+    const time = d.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit', hour12: true });
+    const now = new Date();
+    const sameDay = d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+    if (sameDay)
+        return time;
+    const date = d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' });
+    return `${date} · ${time}`;
+}
 export function formatDateRangeLabelAr(fromKey, toKey) {
     if (fromKey === toKey) {
         return isTodayKey(fromKey) ? 'اليوم' : formatDateLabelAr(fromKey);

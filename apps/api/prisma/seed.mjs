@@ -18,6 +18,8 @@ const permissionSeeds = [
   ['products.read', 'قراءة المنتجات'],
   ['product-categories.read', 'قراءة فئات المنتجات'],
   ['stock-items.read', 'قراءة أصناف المخزون'],
+  ['customers.read', 'قراءة العملاء والبحث'],
+  ['customers.manage', 'إدارة العملاء'],
 ];
 
 const rolePermissions = {
@@ -35,8 +37,10 @@ const rolePermissions = {
     'branches.read',
     'products.read',
     'product-categories.read',
+    'customers.read',
+    'customers.manage',
   ],
-  cashier: ['pos.use', 'shifts.access', 'branches.read', 'products.read', 'product-categories.read', 'stock-items.read'],
+  cashier: ['pos.use', 'shifts.access', 'branches.read', 'products.read', 'product-categories.read', 'stock-items.read', 'customers.read'],
   accountant: ['dashboard.view', 'orders.approve_collection', 'shifts.access', 'treasury.manage', 'reports.view', 'expenses.manage'],
 };
 

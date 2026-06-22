@@ -43,8 +43,27 @@ type WalletTotals = {
   walletBalances: WalletBalanceSummary;
 };
 
+type WorkspacePermissions = {
+  canApprove: boolean;
+  canManageShift: boolean;
+  canViewAllShifts: boolean;
+  canViewTreasury: boolean;
+  canViewApprovals: boolean;
+  openedByIdFilter: string | null;
+};
+
+type BranchTreasuryBalance = SafeBalanceSummary & {
+  byPaymentMethod: Record<string, number>;
+  physicalCash: number;
+  walletBalances: WalletBalanceSummary;
+  walletTotalsByPaymentMethod: Record<PaymentMethodType, number>;
+};
+
 @Injectable()
 export class TreasuryService {
+  private workspacePermCache = new Map<string, { expiresAt: number; value: WorkspacePermissions }>();
+  private branchBalanceCache = new Map<string, { expiresAt: number; value: BranchTreasuryBalance }>();
+
   constructor(private prisma: PrismaService) {}
 
   private roundMoney(value: number) {
@@ -237,6 +256,12 @@ export class TreasuryService {
       expectedCash: openingFloat + incoming - outgoing,
       totalSales,
       byPaymentMethod,
+      salesByMethod: Object.fromEntries(
+        Object.entries(byPaymentMethod).map(([method, vals]) => [
+          method,
+          { ...vals, total: vals.approved + vals.pending },
+        ]),
+      ),
       pendingCashInCustody,
     };
   }
@@ -538,7 +563,6 @@ export class TreasuryService {
     const transactions = await this.prisma.treasuryTransaction.findMany({
       where: {
         branchId,
-        transactionType: 'SALE_RECEIPT',
         occurredAt: { gte: start, lte: end },
         ...(cashBoxId ? { cashBoxId } : {}),
       },
@@ -547,41 +571,33 @@ export class TreasuryService {
         paymentMethod: true,
         safeType: true,
         approvalStatus: true,
+        transactionType: true,
+        sourceType: true,
       },
     });
 
     const byPaymentMethod: Record<string, { approved: number; pending: number }> = {};
     let approvedTotal = 0;
     let pendingTotal = 0;
+    const safeTxs: typeof transactions = [];
 
     for (const tx of transactions) {
-      const amount = Number(tx.amount);
-      const key = tx.paymentMethod;
-      if (!byPaymentMethod[key]) byPaymentMethod[key] = { approved: 0, pending: 0 };
-      if (tx.approvalStatus === 'APPROVED') {
-        byPaymentMethod[key].approved += amount;
-        approvedTotal += amount;
-      } else if (tx.approvalStatus === 'PENDING') {
-        byPaymentMethod[key].pending += amount;
-        pendingTotal += amount;
+      if (tx.transactionType === 'SALE_RECEIPT') {
+        const amount = Number(tx.amount);
+        const key = tx.paymentMethod;
+        if (!byPaymentMethod[key]) byPaymentMethod[key] = { approved: 0, pending: 0 };
+        if (tx.approvalStatus === 'APPROVED') {
+          byPaymentMethod[key].approved += amount;
+          approvedTotal += amount;
+        } else if (tx.approvalStatus === 'PENDING') {
+          byPaymentMethod[key].pending += amount;
+          pendingTotal += amount;
+        }
+      } else if (tx.approvalStatus === 'APPROVED') {
+        safeTxs.push(tx);
       }
     }
 
-    const safeTxs = await this.prisma.treasuryTransaction.findMany({
-      where: {
-        branchId,
-        approvalStatus: 'APPROVED',
-        occurredAt: { gte: start, lte: end },
-        ...(cashBoxId ? { cashBoxId } : {}),
-      },
-      select: {
-        amount: true,
-        transactionType: true,
-        safeType: true,
-        paymentMethod: true,
-        sourceType: true,
-      },
-    });
     const walletTotals = this.summarizeWalletBalances(safeTxs);
 
     let physicalCash = expectedCashFromShift ?? 0;
@@ -671,7 +687,12 @@ export class TreasuryService {
     });
   }
 
-  async resolveWorkspacePermissions(userId: string) {
+  async resolveWorkspacePermissions(userId: string): Promise<WorkspacePermissions> {
+    const cached = this.workspacePermCache.get(userId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
     const userRoles = await this.prisma.userRole.findMany({
       where: { userId },
       include: {
@@ -706,7 +727,7 @@ export class TreasuryService {
     const canViewTreasury = canManageShift;
     const canViewApprovals = canApprove;
 
-    return {
+    const result: WorkspacePermissions = {
       canApprove,
       canManageShift,
       canViewAllShifts: canManageShift,
@@ -714,6 +735,13 @@ export class TreasuryService {
       canViewApprovals,
       openedByIdFilter: canManageShift ? null : userId,
     };
+
+    this.workspacePermCache.set(userId, {
+      expiresAt: Date.now() + 60_000,
+      value: result,
+    });
+
+    return result;
   }
 
   async listShiftsForWorkspace(
@@ -850,15 +878,21 @@ export class TreasuryService {
     const fromDate = params.fromDate;
     const toDate = params.toDate ?? params.fromDate;
     const sectionSet = new Set<WorkspaceSection>(params.sections ?? ['current']);
-    const perms = await this.resolveWorkspacePermissions(userId);
 
-    const [branch, cashBox, paymentMethods] = await Promise.all([
+    const needPaymentMethods = sectionSet.has('approvals') || sectionSet.has('treasury');
+    const needTreasuryToday = sectionSet.has('treasury') || sectionSet.has('approvals');
+    const needTreasuryCumulative = sectionSet.has('treasury');
+
+    const [perms, branch, cashBox, paymentMethods] = await Promise.all([
+      this.resolveWorkspacePermissions(userId),
       this.prisma.branch.findUnique({ where: { id: branchId } }),
       this.prisma.cashBox.findUnique({ where: { id: cashBoxId } }),
-      this.prisma.paymentMethod.findMany({
-        where: { branchId, isActive: true },
-        orderBy: { sortOrder: 'asc' },
-      }),
+      needPaymentMethods
+        ? this.prisma.paymentMethod.findMany({
+            where: { branchId, isActive: true },
+            orderBy: { sortOrder: 'asc' },
+          })
+        : Promise.resolve([]),
     ]);
 
     if (!branch) throw new NotFoundException('Branch not found');
@@ -888,7 +922,7 @@ export class TreasuryService {
       });
 
       if (shift) {
-        const summary = await this.getShiftSummary(shift.id);
+        const summary = await this.getShiftSummaryLight(shift.id);
         currentShift = {
           shiftOpen: true,
           shift: summary.shift,
@@ -901,9 +935,16 @@ export class TreasuryService {
             expectedCash: summary.expectedCash,
             totalSales: summary.totalSales,
             byPaymentMethod: summary.byPaymentMethod,
+            salesByMethod: summary.salesByMethod,
+            expensesTotal: summary.expensesTotal,
+            ordersCount: summary.ordersCount,
+            transactionCount: summary.transactionCount,
+            uncollectedCount: summary.uncollectedCount,
+            uncollectedTotal: summary.uncollectedTotal,
+            uncollectedOrders: summary.uncollectedOrders,
           },
         };
-        shiftTransactions = summary.transactions;
+        shiftTransactions = summary.transactions as unknown as typeof shiftTransactions;
       }
     }
 
@@ -933,7 +974,7 @@ export class TreasuryService {
       collectorSummary,
       safeSplitSetting,
     ] = await Promise.all([
-      sectionSet.has('treasury')
+      needTreasuryToday
         ? this.getTreasuryToday(
             branchId,
             reportDate,
@@ -941,7 +982,7 @@ export class TreasuryService {
             currentShift.summary?.expectedCash ?? null,
           )
         : Promise.resolve(emptyTreasuryToday),
-      sectionSet.has('treasury') && perms.canViewTreasury
+      needTreasuryCumulative && perms.canViewTreasury
         ? this.getBranchTreasuryBalance(branchId, cashBoxId)
         : Promise.resolve({
             byPaymentMethod: {},
@@ -1090,7 +1131,28 @@ export class TreasuryService {
     });
     const updated = await this.prisma.treasuryTransaction.findUnique({ where: { id } });
 
-    if (tx.sourceType === 'ORDER') {
+    if (tx.sourceType === 'ORDER' && tx.transactionType === 'SALE_RECEIPT') {
+      const order = await this.prisma.order.findUnique({
+        where: { id: tx.sourceId },
+        select: { id: true, status: true, totalAmount: true },
+      });
+      if (order?.status === 'CLOSED') {
+        await this.prisma.order.update({
+          where: { id: order.id },
+          data: {
+            collectionStatus: 'UNCOLLECTED',
+            approvalStatus: 'PENDING',
+            paymentStatus: 'PENDING',
+            amountPaid: 0,
+            amountDue: Number(order.totalAmount),
+          },
+        });
+        await this.prisma.orderPayment.updateMany({
+          where: { orderId: order.id },
+          data: { approvalStatus: 'REJECTED', affectsCash: false },
+        });
+      }
+    } else if (tx.sourceType === 'ORDER') {
       await this.prisma.order.updateMany({
         where: { id: tx.sourceId },
         data: { collectionStatus: 'UNCOLLECTED', approvalStatus: 'PENDING' },
@@ -1104,7 +1166,13 @@ export class TreasuryService {
     return updated;
   }
 
-  async getBranchTreasuryBalance(branchId: string, cashBoxId?: string) {
+  async getBranchTreasuryBalance(branchId: string, cashBoxId?: string): Promise<BranchTreasuryBalance> {
+    const cacheKey = `${branchId}:${cashBoxId ?? 'all'}`;
+    const cached = this.branchBalanceCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.value;
+    }
+
     const transactions = await this.prisma.treasuryTransaction.findMany({
       where: {
         branchId,
@@ -1143,16 +1211,18 @@ export class TreasuryService {
       }
     }
 
-    return {
+    const result = {
       byPaymentMethod,
       physicalCash,
       ...walletTotals.bySafeType,
       walletBalances: walletTotals.walletBalances,
       walletTotalsByPaymentMethod: walletTotals.byPaymentMethod,
     };
+    this.branchBalanceCache.set(cacheKey, { expiresAt: Date.now() + 45_000, value: result });
+    return result;
   }
 
-  async getShiftSummary(shiftId: string) {
+  async getShiftSummaryLight(shiftId: string) {
     const shift = await this.prisma.shift.findUnique({
       where: { id: shiftId },
       include: { cashBox: true, openedBy: true },
@@ -1161,13 +1231,108 @@ export class TreasuryService {
       throw new NotFoundException('Shift not found');
     }
 
-    const transactions = await this.listTransactions({ shiftId });
-    const totals = this.computeShiftTotals(Number(shift.openingFloat), transactions);
+    const txSelect = {
+      amount: true,
+      transactionType: true,
+      paymentMethod: true,
+      safeType: true,
+      approvalStatus: true,
+      affectsCash: true,
+      sourceType: true,
+    } as const;
 
+    const uncollectedWhere = {
+      shiftId,
+      status: 'CLOSED' as const,
+      OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
+    };
+
+    const [allTxRows, recentTransactionsRaw, expenseAgg, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
+      this.prisma.treasuryTransaction.findMany({
+        where: { shiftId },
+        select: txSelect,
+      }),
+      this.prisma.treasuryTransaction.findMany({
+        where: { shiftId },
+        select: {
+          id: true,
+          amount: true,
+          transactionType: true,
+          paymentMethod: true,
+          safeType: true,
+          note: true,
+          occurredAt: true,
+          approvalStatus: true,
+          sourceType: true,
+          sourceId: true,
+          paymentMethodRef: { select: { name: true } },
+        },
+        orderBy: { occurredAt: 'desc' },
+        take: 200,
+      }),
+      this.prisma.cashierExpense.aggregate({
+        where: { shiftId },
+        _sum: { amount: true },
+      }),
+      this.prisma.order.aggregate({
+        where: { shiftId, status: 'CLOSED' },
+        _count: true,
+        _sum: { totalAmount: true },
+      }),
+      this.prisma.order.aggregate({
+        where: uncollectedWhere,
+        _sum: { totalAmount: true },
+        _count: true,
+      }),
+      this.prisma.order.findMany({
+        where: uncollectedWhere,
+        select: { orderNumber: true, totalAmount: true, customerName: true },
+        orderBy: { closedAt: 'desc' },
+        take: 25,
+      }),
+    ]);
+
+    const orderIds = [
+      ...new Set(
+        recentTransactionsRaw
+          .filter((tx) => tx.sourceType === 'ORDER' && tx.sourceId)
+          .map((tx) => tx.sourceId),
+      ),
+    ];
+    const linkedOrders = orderIds.length
+      ? await this.prisma.order.findMany({
+          where: { id: { in: orderIds } },
+          select: { id: true, orderNumber: true },
+        })
+      : [];
+    const orderNumberMap = new Map(linkedOrders.map((o) => [o.id, o.orderNumber] as const));
+    const recentTransactions = recentTransactionsRaw.map((tx) => ({
+      ...tx,
+      orderId: tx.sourceType === 'ORDER' ? tx.sourceId : null,
+      orderNumber: tx.sourceType === 'ORDER' ? orderNumberMap.get(tx.sourceId) ?? null : null,
+    }));
+
+    const totals = this.computeShiftTotals(Number(shift.openingFloat), allTxRows);
+    const uncollectedOrders = uncollectedOrdersRaw.map((o) => ({
+      orderNumber: o.orderNumber,
+      total: Number(o.totalAmount),
+      customerName: o.customerName,
+    }));
     return {
       shift,
-      transactions,
+      transactions: recentTransactions,
+      transactionCount: allTxRows.length,
+      ordersCount: closedOrdersAgg._count,
+      expensesTotal: Number(expenseAgg._sum.amount ?? 0),
+      uncollectedCount: uncollectedAgg._count,
+      uncollectedTotal: Number(uncollectedAgg._sum.totalAmount ?? 0),
+      uncollectedOrders,
       ...totals,
+      totalSales: Number(closedOrdersAgg._sum.totalAmount ?? 0),
     };
+  }
+
+  async getShiftSummary(shiftId: string) {
+    return this.getShiftSummaryLight(shiftId);
   }
 }

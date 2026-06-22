@@ -88,3 +88,37 @@ export class VoidOrderDto {
   @IsString()
   reason?: string;
 }
+
+export class CancelOrderRequestDto {
+  @IsOptional()
+  @IsString()
+  reason?: string;
+}
+
+export class AmendOrderDto {
+  @IsOptional()
+  @IsString()
+  customerName?: string;
+
+  @IsOptional()
+  @IsString()
+  customerPhone?: string;
+
+  @IsOptional()
+  @IsString()
+  customerAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  captainName?: string;
+
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemInputDto)
+  items?: OrderItemInputDto[];
+}

@@ -29,6 +29,15 @@ export class ShiftsController {
     return this.shiftsService.closeShift(dto, req.user?.id);
   }
 
+  @Get('handoff-options')
+  @RequirePermissions('shifts.access')
+  handoffOptions(@Query('shiftId') shiftId: string) {
+    if (!shiftId?.trim()) {
+      throw new BadRequestException('shiftId مطلوب');
+    }
+    return this.shiftsService.getHandoffOptions(shiftId.trim());
+  }
+
   @Get('pos-context')
   @RequirePermissions('pos.use')
   posContext(@Request() req: any) {
@@ -37,6 +46,12 @@ export class ShiftsController {
       throw new BadRequestException('Organization not found for user');
     }
     return this.shiftsService.getPosContext(organizationId, req.user?.id);
+  }
+
+  @Get('pos-catalog')
+  @RequirePermissions('pos.use')
+  posCatalog(@Query('branchId') branchId: string) {
+    return this.shiftsService.getPosCatalog(branchId);
   }
 
   @Get('pos-summary')

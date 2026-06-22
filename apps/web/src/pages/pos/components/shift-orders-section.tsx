@@ -13,6 +13,16 @@ type ShiftOrdersSectionProps = {
   onTabChange: (tab: 'uncollected' | 'collected') => void;
   onCollect: (order: SavedOrder) => void;
   onRetry: () => void;
+  onReprint?: (order: SavedOrder, copies: import('../../../lib/pos-receipt.js').PrintCopies) => void;
+  onViewAudit?: (order: SavedOrder) => void;
+  onViewSummary?: (order: SavedOrder) => void;
+  onEdit?: (order: SavedOrder) => void;
+  onUncollect?: (order: SavedOrder) => Promise<void>;
+  onCancel?: (order: SavedOrder, reason: string) => Promise<void>;
+  onRequestCancel?: (order: SavedOrder, reason: string) => Promise<void>;
+  onWithdrawCancel?: (order: SavedOrder) => Promise<void>;
+  showReprint?: boolean;
+  pendingOrderId?: string | null;
 };
 
 export function ShiftOrdersSection({
@@ -26,6 +36,16 @@ export function ShiftOrdersSection({
   onTabChange,
   onCollect,
   onRetry,
+  onReprint,
+  onViewAudit,
+  onViewSummary,
+  onEdit,
+  onUncollect,
+  onCancel,
+  onRequestCancel,
+  onWithdrawCancel,
+  showReprint,
+  pendingOrderId,
 }: ShiftOrdersSectionProps) {
   const visible = tab === 'uncollected' ? uncollected : collected;
 
@@ -67,10 +87,28 @@ export function ShiftOrdersSection({
                   order={order}
                   variant="closed"
                   actionLabel="تحصيل الآن"
+                  actionBusy={pendingOrderId === order.id}
                   onAction={() => onCollect(order)}
+                  {...(showReprint && onReprint ? { showReprint, onReprint: (copies) => onReprint(order, copies) } : {})}
+                  {...(onViewAudit ? { onViewAudit: () => onViewAudit(order) } : {})}
+                  {...(onViewSummary ? { onViewSummary: () => onViewSummary(order) } : {})}
+                  {...(onEdit ? { onEdit: () => onEdit(order) } : {})}
+                  {...(onUncollect && onCancel && onRequestCancel && onWithdrawCancel
+                    ? { onUncollect, onCancel, onRequestCancel, onWithdrawCancel }
+                    : {})}
                 />
               ) : (
-                <OrderSummaryCard order={order} variant="closed" />
+                <OrderSummaryCard
+                  order={order}
+                  variant="closed"
+                  {...(showReprint && onReprint ? { showReprint, onReprint: (copies) => onReprint(order, copies) } : {})}
+                  {...(onViewAudit ? { onViewAudit: () => onViewAudit(order) } : {})}
+                  {...(onViewSummary ? { onViewSummary: () => onViewSummary(order) } : {})}
+                  {...(onEdit ? { onEdit: () => onEdit(order) } : {})}
+                  {...(onUncollect && onCancel && onRequestCancel && onWithdrawCancel
+                    ? { onUncollect, onCancel, onRequestCancel, onWithdrawCancel }
+                    : {})}
+                />
               )}
             </Grid2>
           ))}

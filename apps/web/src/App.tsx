@@ -9,11 +9,13 @@ const TreasuryWorkspacePage = lazy(() => import('./pages/treasury-workspace/trea
 const ManagerUsersPage = lazy(() => import('./pages/manager-users-page.js').then((module) => ({ default: module.ManagerUsersPage })));
 const ReceiptSettingsPage = lazy(() => import('./pages/receipt-settings-page.js').then((module) => ({ default: module.ReceiptSettingsPage })));
 const SettingsHubPage = lazy(() => import('./pages/settings/settings-hub-page.js').then((module) => ({ default: module.SettingsHubPage })));
+const AuditLogPage = lazy(() => import('./pages/audit-log-page.js').then((module) => ({ default: module.AuditLogPage })));
 const InventoryPage = lazy(() => import('./pages/inventory-page.js').then((module) => ({ default: module.InventoryPage })));
 const SetupCostsPage = lazy(() => import('./pages/setup-costs-page.js').then((module) => ({ default: module.SetupCostsPage })));
 const ReportsPage = lazy(() => import('./pages/reports-page.js').then((module) => ({ default: module.ReportsPage })));
 const LoginPage = lazy(() => import('./pages/login-page.js').then((module) => ({ default: module.LoginPage })));
 const CatalogPage = lazy(() => import('./pages/catalog-page.js').then((module) => ({ default: module.CatalogPage })));
+const CustomersPage = lazy(() => import('./pages/customers/customers-page.js').then((module) => ({ default: module.CustomersPage })));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -48,7 +50,9 @@ const router = createBrowserRouter([
       { path: 'settings', element: <PermissionRoute anyOf={['treasury.manage', 'users.manage']}><SettingsHubPage /></PermissionRoute> },
       { path: 'settings/receipt', element: <PermissionRoute permission="treasury.manage"><ReceiptSettingsPage /></PermissionRoute> },
       { path: 'settings/users', element: <PermissionRoute permission="users.manage"><ManagerUsersPage /></PermissionRoute> },
+      { path: 'settings/audit-log', element: <PermissionRoute permission="treasury.manage"><AuditLogPage /></PermissionRoute> },
       { path: 'catalog', element: <PermissionRoute permission="inventory.manage"><CatalogPage /></PermissionRoute> },
+      { path: 'customers', element: <PermissionRoute anyOf={['customers.read', 'treasury.manage', 'pos.use']}><CustomersPage /></PermissionRoute> },
       { path: 'inventory', element: <PermissionRoute permission="inventory.manage"><InventoryPage /></PermissionRoute> },
       { path: 'setup-costs', element: <PermissionRoute permission="setup_costs.manage"><SetupCostsPage /></PermissionRoute> },
       { path: 'reports', element: <PermissionRoute permission="reports.view"><ReportsPage /></PermissionRoute> },

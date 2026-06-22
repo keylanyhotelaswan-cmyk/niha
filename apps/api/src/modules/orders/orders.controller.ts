@@ -4,7 +4,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator.js';
 import { OrdersService } from './orders.service.js';
 import { CreateOrderDto } from '@niha/contracts';
-import { AddPaymentDto, CreateOpenOrderDto, SuspendOrderDto, VoidOrderDto } from './dto/order-lifecycle.dto.js';
+import { AddPaymentDto, AmendOrderDto, CancelOrderRequestDto, CreateOpenOrderDto, SuspendOrderDto, VoidOrderDto } from './dto/order-lifecycle.dto.js';
 
 @Controller('orders')
 @UseGuards(AuthGuard('jwt'), PermissionsGuard)
@@ -41,6 +41,23 @@ export class OrdersController {
     return this.ordersService.listSuspended(branchId);
   }
 
+  @Get('delivery-captains/search')
+  @RequirePermissions('pos.use')
+  searchDeliveryCaptains(
+    @Query('branchId') branchId: string,
+    @Query('q') q?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsedLimit = limit ? Math.min(20, Math.max(1, Number(limit) || 12)) : 12;
+    return this.ordersService.searchDeliveryCaptains(branchId, q, parsedLimit);
+  }
+
+  @Get('pending-cancellations')
+  @RequirePermissions('orders.approve_collection')
+  listPendingCancellations(@Query('branchId') branchId: string, @Query('shiftId') shiftId?: string) {
+    return this.ordersService.listPendingCancellations(branchId, shiftId);
+  }
+
   @Post(':id/suspend')
   @RequirePermissions('pos.use')
   suspend(@Param('id') id: string, @Body() dto: SuspendOrderDto, @Req() req: any) {
@@ -75,5 +92,59 @@ export class OrdersController {
   @RequirePermissions('pos.use')
   void(@Param('id') id: string, @Body() dto: VoidOrderDto, @Req() req: any) {
     return this.ordersService.void(id, req.user?.id, dto);
+  }
+
+  @Get(':id/audit-logs')
+  @RequirePermissions('pos.use')
+  getAuditLogs(@Param('id') id: string) {
+    return this.ordersService.getAuditLogs(id);
+  }
+
+  @Post(':id/amend')
+  @RequirePermissions('pos.use')
+  amend(@Param('id') id: string, @Body() dto: AmendOrderDto, @Req() req: any) {
+    return this.ordersService.amendClosedOrder(id, dto, req.user?.id);
+  }
+
+  @Post(':id/uncollect')
+  @RequirePermissions('pos.use')
+  uncollect(@Param('id') id: string, @Req() req: any) {
+    return this.ordersService.uncollectClosedOrder(id, req.user?.id);
+  }
+
+  @Post(':id/cancel')
+  @RequirePermissions('pos.use')
+  cancelClosed(@Param('id') id: string, @Body() dto: CancelOrderRequestDto, @Req() req: any) {
+    return this.ordersService.cancelClosedOrder(id, req.user?.id, dto);
+  }
+
+  @Post(':id/cancel-request')
+  @RequirePermissions('pos.use')
+  requestCancel(@Param('id') id: string, @Body() dto: CancelOrderRequestDto, @Req() req: any) {
+    return this.ordersService.requestCancelClosedOrder(id, req.user?.id, dto);
+  }
+
+  @Post(':id/cancel-request/withdraw')
+  @RequirePermissions('pos.use')
+  withdrawCancel(@Param('id') id: string, @Req() req: any) {
+    return this.ordersService.withdrawCancelRequest(id, req.user?.id);
+  }
+
+  @Get(':id')
+  @RequirePermissions('pos.use', 'shifts.access')
+  getById(@Param('id') id: string) {
+    return this.ordersService.getOrderDetail(id);
+  }
+
+  @Post(':id/cancel-request/approve')
+  @RequirePermissions('orders.approve_collection')
+  approveCancel(@Param('id') id: string, @Req() req: any) {
+    return this.ordersService.approveOrderCancellation(id, req.user?.id);
+  }
+
+  @Post(':id/cancel-request/reject')
+  @RequirePermissions('orders.approve_collection')
+  rejectCancel(@Param('id') id: string, @Body() dto: CancelOrderRequestDto, @Req() req: any) {
+    return this.ordersService.rejectOrderCancellation(id, req.user?.id, dto.reason);
   }
 }

@@ -3,6 +3,7 @@ import {
   Box,
   Button,
   Chip,
+  CircularProgress,
   MenuItem,
   Paper,
   Stack,
@@ -20,7 +21,8 @@ import {
   isTodayRange,
   localTodayKey,
 } from '../../lib/date-utils.js';
-import { isCashierTreasuryView } from '../../lib/permissions.js';
+import { formatShiftDuration, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
+import { isCashierTreasuryView, canManageTreasury, hasPermission } from '../../lib/permissions.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
 import { CurrentShiftTab } from './tabs/current-shift-tab.js';
 import { ApprovalsTab } from './tabs/approvals-tab.js';
@@ -28,11 +30,10 @@ import { TreasuryTab } from './tabs/treasury-tab.js';
 import { ShiftHistoryTab } from './tabs/shift-history-tab.js';
 
 function sectionsForTab(tabKey: string): string[] {
-  const base: string[] = ['current'];
-  if (tabKey === 'approvals') return [...base, 'approvals'];
-  if (tabKey === 'treasury') return [...base, 'treasury'];
-  if (tabKey === 'history') return [...base, 'history'];
-  return base;
+  if (tabKey === 'approvals') return ['approvals'];
+  if (tabKey === 'treasury') return ['treasury'];
+  if (tabKey === 'history') return ['history'];
+  return ['current'];
 }
 
 function readDateParam(searchParams: URLSearchParams, key: 'from' | 'to') {
@@ -47,16 +48,14 @@ export function TreasuryWorkspacePage() {
   const [searchParams] = useSearchParams();
   const { permissions } = useAuth();
   const cashierView = isCashierTreasuryView(permissions);
-  const todayKey = localTodayKey();
   const { data: branches = [] } = useBranches();
   const [branchId, setBranchId] = useState('');
   const { data: cashBoxes = [] } = useCashBoxes(branchId);
   const [cashBoxId, setCashBoxId] = useState('');
-  const [fromDate, setFromDate] = useState(() => (cashierView ? todayKey : readDateParam(searchParams, 'from')));
-  const [toDate, setToDate] = useState(() => (cashierView ? todayKey : readDateParam(searchParams, 'to')));
+  const [fromDate, setFromDate] = useState(() => (cashierView ? '' : readDateParam(searchParams, 'from')));
+  const [toDate, setToDate] = useState(() => (cashierView ? '' : readDateParam(searchParams, 'to')));
   const [tab, setTab] = useState(0);
   const [actionMessage, setActionMessage] = useState('');
-  const [loadedSections, setLoadedSections] = useState<string[]>(['current']);
 
   useEffect(() => {
     if (!branches.length) return;
@@ -70,50 +69,43 @@ export function TreasuryWorkspacePage() {
   }, [branches, branchId, cashierView]);
 
   useEffect(() => {
-    if (cashierView) {
-      setFromDate(todayKey);
-      setToDate(todayKey);
-    }
-  }, [cashierView, todayKey]);
-
-  useEffect(() => {
     if (cashBoxes.length && !cashBoxId) setCashBoxId(cashBoxes[0].id);
   }, [cashBoxes, cashBoxId]);
 
-  const { data: workspace, refetch, isLoading, isError, error } = useTreasuryWorkspace(
-    branchId,
-    cashBoxId,
-    fromDate,
-    toDate,
-    loadedSections,
-  );
-  const perms = workspace?.permissions ?? {};
-
   const visibleTabs = useMemo(() => {
     if (cashierView) {
-      return [{ key: 'current', label: 'ورديتي اليوم' }];
+      return [{ key: 'current', label: 'ورديتي المفتوحة' }];
     }
     const tabs: { key: string; label: string }[] = [
       { key: 'current', label: 'الوردية الحالية' },
     ];
-    if (perms.canViewApprovals) tabs.push({ key: 'approvals', label: 'اعتماد الخزنة' });
-    if (perms.canViewTreasury) tabs.push({ key: 'treasury', label: 'الخزنة' });
+    if (hasPermission(permissions, 'orders.approve_collection') || canManageTreasury(permissions)) {
+      tabs.push({ key: 'approvals', label: 'اعتماد الخزنة' });
+    }
+    if (canManageTreasury(permissions)) tabs.push({ key: 'treasury', label: 'الخزنة' });
     tabs.push({ key: 'history', label: 'سجل الورديات' });
     return tabs;
-  }, [cashierView, perms.canViewApprovals, perms.canViewTreasury]);
+  }, [cashierView, permissions]);
 
-  const activeKey = visibleTabs[tab]?.key ?? 'current';
+  const safeTab = tab < visibleTabs.length ? tab : 0;
+  const activeTabKey = visibleTabs[safeTab]?.key ?? 'current';
+
+  const { data: workspace, refetch, isLoading, isFetching, isError, error } = useTreasuryWorkspace(
+    branchId,
+    cashBoxId,
+    cashierView ? undefined : fromDate,
+    cashierView ? undefined : toDate,
+    sectionsForTab(activeTabKey),
+  );
+
+  const openShift = workspace?.currentShift?.shift;
+  const openShiftSummary = workspace?.currentShift?.summary;
 
   useEffect(() => {
-    const needed = sectionsForTab(activeKey);
-    setLoadedSections((prev) => {
-      const merged = [...new Set([...prev, ...needed])];
-      if (merged.length === prev.length && merged.every((s, i) => s === prev[i])) return prev;
-      return merged;
-    });
-  }, [activeKey]);
+    if (tab >= visibleTabs.length) setTab(0);
+  }, [tab, visibleTabs.length]);
 
-  const onRefresh = () => refetch();
+  const onRefresh = () => { void refetch(); };
   const onMessage = (msg: string) => setActionMessage(msg);
   const setTodayRange = () => {
     const today = localTodayKey();
@@ -125,11 +117,11 @@ export function TreasuryWorkspacePage() {
     <Stack spacing={2.5}>
       <Paper elevation={0} sx={{ p: 2.5, borderRadius: 5, background: 'linear-gradient(135deg, #2f1f24, #5a2718)', color: '#fff7ed' }}>
         <Typography variant="h5" fontWeight={800}>
-          {cashierView ? 'ورديتي اليوم' : 'الخزنة والورديات'}
+          {cashierView ? 'ورديتي المفتوحة' : 'الخزنة والورديات'}
         </Typography>
         <Typography variant="body2" sx={{ opacity: 0.85, mt: 0.5 }}>
           {cashierView
-            ? 'عهدة الكاشير وتحصيلات اليوم — عرض فقط.'
+            ? 'ملخص الوردية الحالية من لحظة الفتح — عهدة، تحصيل، ومصروفات.'
             : 'الوردية الحالية وسجلها — التحصيل والخزنة للمدير.'}
         </Typography>
       </Paper>
@@ -139,10 +131,22 @@ export function TreasuryWorkspacePage() {
 
       {cashierView ? (
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Chip size="small" color="primary" label={`اليوم · ${formatDateRangeLabelAr(todayKey, todayKey)}`} />
+          {openShift ? (
+            <Chip
+              size="small"
+              color="success"
+              label={`${openShift.shiftNumber} · ${formatShiftOpenedAt(openShift.openedAt)} · ${formatShiftDuration(openShift.openedAt)}`}
+            />
+          ) : (
+            <Chip size="small" color="default" label="لا وردية مفتوحة" />
+          )}
+          {openShiftSummary ? (
+            <Chip size="small" variant="outlined" label={`عهدة ${Number(openShiftSummary.expectedCash ?? 0).toLocaleString('en-US')} ج.م`} />
+          ) : null}
           <Typography variant="body2" color="text.secondary">
             {workspace?.context?.branch?.name ?? '—'} · {workspace?.context?.cashBox?.name ?? '—'}
           </Typography>
+          {isFetching ? <CircularProgress size={16} /> : null}
         </Stack>
       ) : (
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ md: 'flex-start' }}>
@@ -193,13 +197,14 @@ export function TreasuryWorkspacePage() {
             variant={isTodayRange(fromDate, toDate) ? 'filled' : 'outlined'}
             label={formatDateRangeLabelAr(fromDate, toDate)}
           />
+          {isFetching ? <CircularProgress size={18} /> : null}
         </Stack>
       </Stack>
       )}
 
       {!cashierView ? (
       <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
+        <Tabs value={safeTab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
           {visibleTabs.map((t) => (
             <Tab key={t.key} label={t.label} />
           ))}
@@ -211,13 +216,13 @@ export function TreasuryWorkspacePage() {
         <Typography color="text.secondary">جاري التحميل...</Typography>
       ) : workspace ? (
         <>
-          {activeKey === 'current' ? (
+          {activeTabKey === 'current' ? (
             <CurrentShiftTab workspace={workspace} branchId={branchId} cashBoxId={cashBoxId} onRefresh={onRefresh} onMessage={onMessage} />
           ) : null}
-          {activeKey === 'approvals' ? (
+          {activeTabKey === 'approvals' ? (
             <ApprovalsTab workspace={workspace} onRefresh={onRefresh} onMessage={onMessage} />
           ) : null}
-          {activeKey === 'treasury' ? (
+          {activeTabKey === 'treasury' ? (
             <TreasuryTab
               workspace={workspace}
               branchId={branchId}
@@ -226,7 +231,7 @@ export function TreasuryWorkspacePage() {
               onMessage={onMessage}
             />
           ) : null}
-          {activeKey === 'history' ? (
+          {activeTabKey === 'history' ? (
             <ShiftHistoryTab workspace={workspace} fromDate={fromDate} toDate={toDate} />
           ) : null}
         </>

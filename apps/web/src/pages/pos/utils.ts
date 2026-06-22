@@ -1,10 +1,16 @@
 import type { CollectionStatus } from '../../lib/pos-store.js';
+import { formatOrderTimestamp } from '../../lib/date-utils.js';
 
 export function formatCurrency(value: number) {
   return `${value.toLocaleString('en-US')} ج.م`;
 }
 
-export function collectionTone(status: CollectionStatus) {
+export { formatOrderTimestamp };
+
+export function collectionTone(status: CollectionStatus, cancelPending?: boolean) {
+  if (cancelPending) {
+    return { bg: 'rgba(127,29,29,0.14)', color: '#991b1b', border: 'rgba(127,29,29,0.28)' };
+  }
   if (status === 'approved') {
     return { bg: 'rgba(15,118,110,0.12)', color: '#0f766e', border: 'rgba(15,118,110,0.25)' };
   }

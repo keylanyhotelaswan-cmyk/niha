@@ -4,6 +4,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SequenceService } from '../sequence/sequence.service';
 import { TreasuryService } from '../treasury/treasury.service';
 import { PaymentMethodsService } from '../payment-methods/payment-methods.service';
+import { AuditService } from '../audit/audit.service';
+import { CustomersService } from '../customers/customers.service';
 
 describe('OrdersService', () => {
   let service: OrdersService;
@@ -25,6 +27,8 @@ describe('OrdersService', () => {
   };
   const treasuryMock = { recordSaleReceipt: jest.fn() };
   const paymentMethodsMock = { findByCode: jest.fn().mockResolvedValue({ id: 'pm-1', type: 'CASH' }) };
+  const auditMock = { log: jest.fn().mockResolvedValue(undefined) };
+  const customersMock = { syncFromOrder: jest.fn().mockResolvedValue(null) };
 
   beforeEach(() => {
     service = new OrdersService(
@@ -32,6 +36,8 @@ describe('OrdersService', () => {
       sequenceMock as unknown as SequenceService,
       treasuryMock as unknown as TreasuryService,
       paymentMethodsMock as unknown as PaymentMethodsService,
+      auditMock as unknown as AuditService,
+      customersMock as unknown as CustomersService,
     );
     jest.clearAllMocks();
   });

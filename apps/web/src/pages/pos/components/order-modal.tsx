@@ -6,6 +6,7 @@ import {
   CardActionArea,
   CardContent,
   Chip,
+  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -19,14 +20,20 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { getCollectionStatusLabel, type CartItem, type CollectionStatus, type OrderType } from '../../../lib/pos-store.js';
+import { getCollectionStatusLabel, validateTakeawayOrderFields, type CartItem, type CollectionStatus, type OrderType } from '../../../lib/pos-store.js';
 import type { PaymentMethodOption } from '../constants.js';
 import { collectionTone, formatCurrency } from '../utils.js';
 import { OrderTypeToggle } from './order-type-toggle.js';
+import { OrderConfirmDialog } from './order-confirm-dialog.js';
+import type { DeliveryDriver } from '../../../lib/pos-receipt-settings.js';
+import { CustomerPhoneField, type CustomerSearchHit } from '../../../components/customer-phone-field.js';
+import { CaptainNameField } from '../../../components/captain-name-field.js';
+import { useState, useEffect } from 'react';
 
 type OrderModalProps = {
   open: boolean;
   fullScreen: boolean;
+  branchId: string;
   operatorName: string;
   orderType: OrderType;
   currentOrderCode: string;
@@ -37,6 +44,7 @@ type OrderModalProps = {
   onOrderOwnerName: (v: string) => void;
   customerPhone: string;
   onCustomerPhone: (v: string) => void;
+  onSelectCustomer?: (customer: CustomerSearchHit) => void;
   customerAddress: string;
   onCustomerAddress: (v: string) => void;
   captainName: string;
@@ -60,17 +68,62 @@ type OrderModalProps = {
   onDiscountAmount: (v: string) => void;
   orderNote: string;
   onOrderNote: (v: string) => void;
+  sauces?: Array<{ id: string; name: string }>;
+  onToggleItemSauce?: (productId: string, sauceName: string) => void;
   subtotal: number;
   discount: number;
   total: number;
   onClose: () => void;
-  onSuspend: () => void;
-  onCloseOrder: () => void;
+  onSuspend: () => void | Promise<{ ok: boolean; error?: string } | undefined>;
+  onCloseOrder: () => void | Promise<void>;
   onClearCart: () => void;
+  deliveryDrivers?: DeliveryDriver[];
+  validateTakeawayCustomer?: () => { ok: true } | { ok: false; error: string };
+  catalogPending?: boolean;
 };
 
 export function OrderModal(props: OrderModalProps) {
   const tone = collectionTone(props.collectionStatus);
+  const handleCloseOrder = () => {
+    const check = props.validateTakeawayCustomer?.();
+    if (check && !check.ok) {
+      setShowFieldErrors(true);
+      setValidationError(check.error);
+      return;
+    }
+    setShowFieldErrors(false);
+    setValidationError('');
+    setConfirmOpen(false);
+    void props.onCloseOrder();
+  };
+
+  const openReview = () => {
+    const check = props.validateTakeawayCustomer?.();
+    if (check && !check.ok) {
+      setShowFieldErrors(true);
+      setValidationError(check.error);
+      return;
+    }
+    setShowFieldErrors(false);
+    setValidationError('');
+    setConfirmOpen(true);
+  };
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [validationError, setValidationError] = useState('');
+  const [showFieldErrors, setShowFieldErrors] = useState(false);
+  const drivers = props.deliveryDrivers ?? [];
+  const takeawayCheck = validateTakeawayOrderFields(props.orderType, props.orderOwnerName, props.customerPhone);
+  const missingName = props.orderType === 'takeaway' && !props.orderOwnerName.trim();
+  const missingPhone = props.orderType === 'takeaway' && !props.customerPhone.trim();
+  const invalidPhone = props.orderType === 'takeaway' && props.customerPhone.trim() !== '' && !takeawayCheck.ok && takeawayCheck.missingLabels.includes('رقم تلفون صحيح');
+
+  useEffect(() => {
+    if (!props.open) {
+      setShowFieldErrors(false);
+      setValidationError('');
+      setConfirmOpen(false);
+    }
+  }, [props.open]);
   const visibleProducts = props.products.filter((p: any) => {
     const catOk = props.activeCategory === props.allCategoriesKey || p.categoryId === props.activeCategory;
     const searchOk = !props.productSearch.trim() || p.name.toLowerCase().includes(props.productSearch.trim().toLowerCase());
@@ -114,25 +167,70 @@ export function OrderModal(props: OrderModalProps) {
                   <TextField size="small" fullWidth placeholder="ابحث عن صنف..." value={props.productSearch} onChange={(e) => props.onProductSearch(e.target.value)} />
                 </Grid2>
                 <Grid2 size={{ xs: 12, sm: 6 }}>
-                  <TextField size="small" fullWidth label="اسم العميل" value={props.orderOwnerName} onChange={(e) => props.onOrderOwnerName(e.target.value)} />
+                  <CustomerPhoneField
+                    branchId={props.branchId}
+                    value={props.customerPhone}
+                    onChange={(e) => {
+                      props.onCustomerPhone(e);
+                      if (validationError) setValidationError('');
+                    }}
+                    {...(props.onSelectCustomer ? { onSelectCustomer: props.onSelectCustomer } : {})}
+                    required={props.orderType === 'takeaway'}
+                    label={props.orderType === 'takeaway' ? 'رقم التلفون *' : 'رقم التلفون (اختياري)'}
+                    error={showFieldErrors && (missingPhone || invalidPhone)}
+                    {...(showFieldErrors && missingPhone
+                      ? { helperText: 'مطلوب للتيك أواي' }
+                      : showFieldErrors && invalidPhone
+                        ? { helperText: 'رقم غير صحيح — 01xxxxxxxxx' }
+                        : {})}
+                  />
+                </Grid2>
+                <Grid2 size={{ xs: 12, sm: 6 }}>
+                  <TextField
+                    size="small"
+                    fullWidth
+                    label="اسم العميل"
+                    value={props.orderOwnerName}
+                    onChange={(e) => {
+                      props.onOrderOwnerName(e.target.value);
+                      if (validationError) setValidationError('');
+                    }}
+                    required={props.orderType === 'takeaway'}
+                    placeholder={props.orderType === 'takeaway' ? 'مطلوب للتيك أواي' : 'اختياري — يُعبّأ تلقائياً من الهاتف'}
+                    error={showFieldErrors && missingName}
+                    helperText={showFieldErrors && missingName ? 'مطلوب للتيك أواي' : undefined}
+                  />
                 </Grid2>
                 {props.orderType === 'takeaway' ? (
                   <>
                     <Grid2 size={{ xs: 12, sm: 6 }}>
-                      <TextField size="small" fullWidth label="رقم التلفون" value={props.customerPhone} onChange={(e) => props.onCustomerPhone(e.target.value)} placeholder="01xxxxxxxxx" />
-                    </Grid2>
-                    <Grid2 size={{ xs: 12, sm: 6 }}>
-                      <TextField size="small" fullWidth label="الكابتن (سواق دليفري)" value={props.captainName} onChange={(e) => props.onCaptainName(e.target.value)} />
+                      <CaptainNameField
+                        branchId={props.branchId}
+                        value={props.captainName}
+                        onChange={props.onCaptainName}
+                        deliveryDrivers={drivers}
+                        required={false}
+                      />
                     </Grid2>
                     <Grid2 size={{ xs: 12 }}>
                       <TextField size="small" fullWidth label="عنوان الزبون" value={props.customerAddress} onChange={(e) => props.onCustomerAddress(e.target.value)} multiline minRows={2} placeholder="الشارع، المنطقة، ملاحظات التوصيل..." />
                     </Grid2>
                   </>
-                ) : null}
+                ) : (
+                  <Grid2 size={{ xs: 12 }}>
+                    <TextField size="small" fullWidth label="عنوان (اختياري)" value={props.customerAddress} onChange={(e) => props.onCustomerAddress(e.target.value)} multiline minRows={2} placeholder="يُعبّأ تلقائياً إذا كان العميل مسجّلاً" />
+                  </Grid2>
+                )}
                 <Grid2 size={{ xs: 12 }}>
                   <OrderTypeToggle value={props.orderType} onChange={props.onOrderTypeChange} />
                 </Grid2>
               </Grid2>
+
+              {validationError ? (
+                <Alert severity="warning" sx={{ borderRadius: 2 }} onClose={() => setValidationError('')}>
+                  {validationError}
+                </Alert>
+              ) : null}
 
               <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                 <Chip
@@ -155,6 +253,12 @@ export function OrderModal(props: OrderModalProps) {
               </Stack>
 
               <Box sx={{ flex: 1, overflowY: 'auto', pr: 0.5 }}>
+                {props.catalogPending ? (
+                  <Stack alignItems="center" justifyContent="center" py={4}>
+                    <CircularProgress size={32} />
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>جاري تحميل الأصناف…</Typography>
+                  </Stack>
+                ) : (
                 <Grid2 container spacing={1.25}>
                   {visibleProducts.map((product: any) => {
                     const qty = props.cartQtyMap.get(product.id) ?? 0;
@@ -187,7 +291,10 @@ export function OrderModal(props: OrderModalProps) {
                     );
                   })}
                 </Grid2>
-                {visibleProducts.length === 0 ? <Alert severity="info" sx={{ mt: 1 }}>لا توجد أصناف مطابقة.</Alert> : null}
+                )}
+                {!props.catalogPending && visibleProducts.length === 0 ? (
+                  <Alert severity="info" sx={{ mt: 1 }}>لا توجد أصناف مطابقة.</Alert>
+                ) : null}
               </Box>
             </Stack>
           </Grid2>
@@ -203,9 +310,16 @@ export function OrderModal(props: OrderModalProps) {
                     {props.cartItems.map((item) => (
                       <Paper key={item.productId} variant="outlined" sx={{ p: 1.25, borderRadius: 2.5 }}>
                         <Stack spacing={0.75}>
-                          <Stack direction="row" justifyContent="space-between" alignItems="center">
-                            <Typography fontWeight={700} fontSize="0.95rem">{item.name}</Typography>
-                            <Typography fontWeight={800}>{formatCurrency(item.unitPrice * item.quantity)}</Typography>
+                          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                            <Typography fontWeight={700} fontSize="0.95rem" sx={{ flex: '0 1 auto' }}>{item.name}</Typography>
+                            <TextField
+                              size="small"
+                              placeholder="ملاحظة الصنف"
+                              value={item.note}
+                              onChange={(e) => props.onUpdateNote(item.productId, e.target.value)}
+                              sx={{ flex: 1, minWidth: 100 }}
+                            />
+                            <Typography fontWeight={800} sx={{ ml: 'auto' }}>{formatCurrency(item.unitPrice * item.quantity)}</Typography>
                           </Stack>
                           <Stack direction="row" spacing={0.5} alignItems="center">
                             <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity - 1)}>−</IconButton>
@@ -213,7 +327,29 @@ export function OrderModal(props: OrderModalProps) {
                             <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity + 1)}>+</IconButton>
                             <Typography variant="caption" color="text.secondary">{formatCurrency(item.unitPrice)}</Typography>
                           </Stack>
-                          <TextField size="small" placeholder="ملاحظة" value={item.note} onChange={(e) => props.onUpdateNote(item.productId, e.target.value)} />
+                          {props.sauces && props.sauces.length > 0 ? (
+                            <>
+                              <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                                صوصات (مجاناً)
+                              </Typography>
+                              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                              {props.sauces.map((sauce) => {
+                                const selected = item.sauces?.includes(sauce.name) ?? false;
+                                return (
+                                  <Chip
+                                    key={`${item.productId}-${sauce.id}`}
+                                    label={sauce.name}
+                                    size="small"
+                                    clickable
+                                    color={selected ? 'primary' : 'default'}
+                                    variant={selected ? 'filled' : 'outlined'}
+                                    onClick={() => props.onToggleItemSauce?.(item.productId, sauce.name)}
+                                  />
+                                );
+                              })}
+                              </Stack>
+                            </>
+                          ) : null}
                         </Stack>
                       </Paper>
                     ))}
@@ -257,11 +393,54 @@ export function OrderModal(props: OrderModalProps) {
       <DialogActions sx={{ px: 2, py: 1.5, borderTop: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.98)' }}>
         <Button onClick={props.onClearCart}>إفراغ</Button>
         <Button onClick={props.onClose}>إلغاء</Button>
-        <Button variant="outlined" disabled={props.cartItems.length === 0} onClick={props.onSuspend}>تعليق</Button>
-        <Button variant="contained" disabled={props.cartItems.length === 0} onClick={props.onCloseOrder} sx={{ fontWeight: 800, px: 3 }}>
-          إغلاق الطلب · {formatCurrency(props.total)}
+        <Button variant="outlined" disabled={props.cartItems.length === 0} onClick={async () => {
+          const check = props.validateTakeawayCustomer?.();
+          if (check && !check.ok) {
+            setShowFieldErrors(true);
+            setValidationError(check.error);
+            return;
+          }
+          setShowFieldErrors(false);
+          const res = await props.onSuspend();
+          if (!res?.ok && (res as any)?.error) setValidationError((res as any).error);
+        }}>تعليق</Button>
+        <Button
+          variant="contained"
+          disabled={props.cartItems.length === 0}
+          onClick={handleCloseOrder}
+          sx={{ fontWeight: 800, px: 3 }}
+        >
+          إغلاق وتأكيد · {formatCurrency(props.total)}
+        </Button>
+        <Button
+          variant="text"
+          disabled={props.cartItems.length === 0}
+          onClick={openReview}
+          sx={{ fontWeight: 700 }}
+        >
+          مراجعة
         </Button>
       </DialogActions>
+
+      <OrderConfirmDialog
+        open={confirmOpen}
+        orderCode={props.currentOrderCode}
+        orderType={props.orderType}
+        orderOwnerName={props.orderOwnerName}
+        customerPhone={props.customerPhone}
+        customerAddress={props.customerAddress}
+        captainName={props.captainName}
+        cartItems={props.cartItems}
+        paymentMethod={props.paymentMethod}
+        paymentMethods={props.paymentMethods}
+        collectionStatus={props.collectionStatus}
+        discount={props.discount}
+        subtotal={props.subtotal}
+        total={props.total}
+        orderNote={props.orderNote}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={handleCloseOrder}
+      />
     </Dialog>
   );
 }

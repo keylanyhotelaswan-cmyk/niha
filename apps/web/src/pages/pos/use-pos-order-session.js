@@ -3,7 +3,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { apiCreateOpenOrder, apiPlaceOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
 import { invalidatePosQueries } from '../../lib/hooks.js';
 import { isAutoPrintEnabled, printPosReceipt, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
-import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, } from '../../lib/pos-store.js';
+import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, } from '../../lib/pos-store.js';
+import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
 export function usePosOrderSession(workspace, catalog) {
@@ -16,7 +17,7 @@ export function usePosOrderSession(workspace, catalog) {
     const [paymentMethod, setPaymentMethod] = useState('cash');
     const [discountAmount, setDiscountAmount] = useState('0');
     const [orderNote, setOrderNote] = useState('');
-    const [orderOwnerName, setOrderOwnerName] = useState(defaultOwnerName('eat-in'));
+    const [orderOwnerName, setOrderOwnerName] = useState('');
     const [customerPhone, setCustomerPhone] = useState('');
     const [customerAddress, setCustomerAddress] = useState('');
     const [captainName, setCaptainName] = useState('');
@@ -48,12 +49,27 @@ export function usePosOrderSession(workspace, catalog) {
         setCollectionStatus('approved');
         setDiscountAmount('0');
         setOrderNote('');
-        setOrderOwnerName(defaultOwnerName(nextType));
+        setOrderOwnerName('');
         setCustomerPhone('');
         setCustomerAddress('');
         setCaptainName('');
         setCartItems([]);
         setOpenOrderId(null);
+    };
+    const toggleItemSauce = (productId, sauceName) => {
+        setCartItems((cur) => cur.map((i) => {
+            if (i.productId !== productId)
+                return i;
+            const sauces = i.sauces ?? [];
+            const next = sauces.includes(sauceName)
+                ? sauces.filter((s) => s !== sauceName)
+                : [...sauces, sauceName];
+            return { ...i, sauces: next };
+        }));
+    };
+    const mapItemApiNote = (item) => {
+        const note = itemNoteForApi(item);
+        return note ? { note } : {};
     };
     const ensureShift = () => {
         if (!shiftOpen)
@@ -82,12 +98,19 @@ export function usePosOrderSession(workspace, catalog) {
     };
     const setOrderTypeAndDefaults = (next) => {
         setOrderType(next);
-        setOrderOwnerName((cur) => {
-            if (!cur.trim() || cur === defaultOwnerName('eat-in') || cur === defaultOwnerName('takeaway')) {
-                return defaultOwnerName(next);
-            }
-            return cur;
-        });
+    };
+    const validateTakeawayCustomer = () => {
+        const check = validateTakeawayOrderFields(orderType, orderOwnerName, customerPhone);
+        if (!check.ok)
+            return { ok: false, error: check.error };
+        return { ok: true };
+    };
+    const applyCustomerSuggestion = (customer) => {
+        setCustomerPhone(customer.phone);
+        if (customer.name?.trim())
+            setOrderOwnerName(customer.name.trim());
+        if (customer.address?.trim())
+            setCustomerAddress(customer.address.trim());
     };
     const addProduct = (product) => {
         if (!product.isAvailable)
@@ -96,7 +119,7 @@ export function usePosOrderSession(workspace, catalog) {
             const ex = cur.find((i) => i.productId === product.id);
             if (ex)
                 return cur.map((i) => i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i);
-            return [...cur, { productId: product.id, name: product.name, unitPrice: product.salePrice, quantity: 1, note: '' }];
+            return [...cur, { productId: product.id, name: product.name, unitPrice: product.salePrice, quantity: 1, note: '', sauces: [] }];
         });
     };
     const updateQuantity = (productId, qty) => {
@@ -113,10 +136,15 @@ export function usePosOrderSession(workspace, catalog) {
     const suspendOrder = async () => {
         if (!ensureShift() || !accessToken || cartItems.length === 0)
             return { ok: false };
-        const itemsPayload = cartItems.map((i) => {
-            const base = { productId: i.productId, quantity: i.quantity, unitPrice: i.unitPrice };
-            return i.note ? { ...base, note: i.note } : base;
-        });
+        const takeawayCheck = validateTakeawayCustomer();
+        if (!takeawayCheck.ok)
+            return takeawayCheck;
+        const itemsPayload = cartItems.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            ...mapItemApiNote(i),
+        }));
         let orderId = openOrderId;
         if (!orderId) {
             const openRes = await apiCreateOpenOrder({
@@ -126,7 +154,7 @@ export function usePosOrderSession(workspace, catalog) {
                 items: itemsPayload,
                 orderType: mapOrderTypeToApi(orderType),
                 discountAmount: Number(discountAmount) || 0,
-                ...(orderNote ? { orderNote } : {}),
+                ...(orderNote.trim() ? { orderNote: orderNote.trim() } : {}),
                 ...(orderOwnerName.trim() ? { orderOwnerName: orderOwnerName.trim() } : {}),
                 ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
                 ...(customerAddress.trim() ? { customerAddress: customerAddress.trim() } : {}),
@@ -153,77 +181,95 @@ export function usePosOrderSession(workspace, catalog) {
     const closeOrder = async () => {
         if (!ensureShift() || !accessToken || cartItems.length === 0)
             return { ok: false };
+        const takeawayCheck = validateTakeawayCustomer();
+        if (!takeawayCheck.ok)
+            return takeawayCheck;
         const pmCode = mapPaymentMethodCode(paymentMethod);
-        const res = await apiPlaceOrder({
-            branchId: effectiveBranchId,
-            ...(shift?.id ? { shiftId: shift.id } : {}),
-            ...(cashBoxId ? { cashBoxId } : {}),
-            items: cartItems.map((i) => {
-                const base = { productId: i.productId, productName: i.name, quantity: i.quantity, unitPrice: i.unitPrice };
-                return i.note ? { ...base, note: i.note } : base;
-            }),
-            total,
-            discountAmount: Number(discountAmount) || 0,
-            paymentMethod: pmCode,
-            orderType: mapOrderTypeToApi(orderType),
-            ...(orderNote ? { orderNote } : {}),
-            ...(orderOwnerName.trim() ? { orderOwnerName: orderOwnerName.trim() } : {}),
-            ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
-            ...(customerAddress.trim() ? { customerAddress: customerAddress.trim() } : {}),
-            ...(captainName.trim() ? { captainName: captainName.trim() } : {}),
-            collectionStatus: mapCollectionApi(collectionStatus),
-        }, accessToken);
-        if (!res.ok)
-            return res;
-        const apiOrder = res.data;
-        const orderCode = apiOrder?.orderNumber ?? currentOrderCode;
-        const pmLabel = catalog.paymentMethods.find((m) => m.id === paymentMethod)?.label ?? paymentMethod;
-        const note = collectionStatus === 'uncollected' ? 'لم يُحصّل — في تبويب غير محصل' : 'تم التحصيل في الدرج';
+        const noteText = orderNote.trim();
         const closedOrderType = orderType;
+        const orderCodeSnapshot = currentOrderCode;
         const shiftIdForRefresh = shift?.id;
         const brand = getStoreBranding();
+        const pmLabel = catalog.paymentMethods.find((m) => m.id === paymentMethod)?.label ?? paymentMethod;
+        const statusNote = collectionStatus === 'uncollected' ? 'لم يُحصّل — في تبويب غير محصل' : 'تم التحصيل في الدرج';
+        const itemsSnapshot = cartItems.map((i) => ({
+            productId: i.productId,
+            productName: i.name,
+            quantity: i.quantity,
+            unitPrice: i.unitPrice,
+            ...mapItemApiNote(i),
+        }));
         const printPayload = workspace.printingEnabled && isAutoPrintEnabled()
             ? {
                 storeName: brand.storeName,
                 storeSubtitle: brand.storeSubtitle,
                 storeFooter: brand.storeFooter,
                 storePhone: brand.storePhone,
-                orderNumber: orderCode,
+                orderNumber: orderCodeSnapshot,
                 shiftNumber: shift?.shiftNumber != null ? String(shift.shiftNumber) : '1',
                 orderType: orderType === 'eat-in' ? 'محلي' : 'تيك أواي',
-                customerName: orderOwnerName.trim() || defaultOwnerName(orderType),
+                ...(orderOwnerName.trim() ? { customerName: orderOwnerName.trim() } : {}),
                 ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
                 ...(customerAddress.trim() ? { customerAddress: customerAddress.trim() } : {}),
                 ...(captainName.trim() ? { captainName: captainName.trim() } : {}),
                 cashierName: shiftOperatorName,
                 paymentMethod: pmLabel,
                 isPaid: collectionStatus !== 'uncollected',
-                items: cartItems.map((i) => ({
-                    name: i.name,
-                    quantity: i.quantity,
-                    unitPrice: i.unitPrice,
-                    lineTotal: i.unitPrice * i.quantity,
-                    ...(i.note ? { note: i.note } : {}),
-                })),
+                items: cartItems.map((i) => {
+                    const note = i.note.trim();
+                    return {
+                        name: i.name,
+                        quantity: i.quantity,
+                        unitPrice: i.unitPrice,
+                        lineTotal: i.unitPrice * i.quantity,
+                        ...(note ? { note } : {}),
+                        ...(i.sauces?.length ? { sauces: i.sauces } : {}),
+                    };
+                }),
                 subtotal,
                 discount,
                 total,
-                ...(orderNote.trim() ? { note: orderNote.trim() } : {}),
+                ...(noteText ? { note: noteText } : {}),
                 createdAt: new Date().toLocaleString('ar-EG'),
             }
             : null;
         resetOrder(closedOrderType);
         setModalOpen(false);
+        catalog.onNotify?.(`جاري إغلاق ${orderCodeSnapshot}…`);
         void (async () => {
+            const res = await apiPlaceOrder({
+                branchId: effectiveBranchId,
+                ...(shift?.id ? { shiftId: shift.id } : {}),
+                ...(cashBoxId ? { cashBoxId } : {}),
+                items: itemsSnapshot,
+                total,
+                discountAmount: Number(discountAmount) || 0,
+                paymentMethod: pmCode,
+                orderType: mapOrderTypeToApi(orderType),
+                ...(noteText ? { orderNote: noteText } : {}),
+                ...(orderOwnerName.trim() ? { orderOwnerName: orderOwnerName.trim() } : {}),
+                ...(customerPhone.trim() ? { customerPhone: customerPhone.trim() } : {}),
+                ...(customerAddress.trim() ? { customerAddress: customerAddress.trim() } : {}),
+                ...(captainName.trim() ? { captainName: captainName.trim() } : {}),
+                collectionStatus: mapCollectionApi(collectionStatus),
+            }, accessToken);
+            if (!res.ok) {
+                catalog.onNotify?.(res.body ?? res.error ?? 'فشل إغلاق الطلب');
+                void refreshAfterOrder(shiftIdForRefresh);
+                return;
+            }
+            const apiOrder = res.data;
+            const orderCode = apiOrder?.orderNumber ?? orderCodeSnapshot;
+            catalog.onNotify?.(`تم إغلاق ${orderCode} — ${statusNote}`);
             if (printPayload) {
-                const printRes = await printPosReceipt(printPayload, { force: true, silent: true, copies: 'both' });
+                const printRes = await printPosReceipt({ ...printPayload, orderNumber: orderCode }, { force: true, silent: true, copies: 'both' });
                 if (!printRes.ok && !printRes.skipped) {
                     catalog.onNotify?.(`تم إغلاق ${orderCode} — فشل الطباعة: ${printRes.message}`);
                 }
             }
-            await refreshAfterOrder(shiftIdForRefresh);
+            void refreshAfterOrder(shiftIdForRefresh);
         })();
-        return { ok: true, orderCode, note };
+        return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
     };
     const resumeSuspended = async (order) => {
         if (!accessToken || !ensureShift())
@@ -236,12 +282,12 @@ export function usePosOrderSession(workspace, catalog) {
         setPaymentMethod(order.paymentMethod);
         setDiscountAmount(order.discountAmount);
         setOrderNote(order.orderNote);
-        setOrderOwnerName(order.ownerName);
+        setOrderOwnerName(order.ownerName && order.ownerName !== defaultOwnerName(order.orderType) ? order.ownerName : '');
         setCustomerPhone(order.customerPhone ?? '');
         setCustomerAddress(order.customerAddress ?? '');
         setCaptainName(order.captainName ?? '');
         setCollectionStatus(order.collectionStatus);
-        setCartItems(order.items);
+        setCartItems(order.items.map((i) => ({ ...i, sauces: i.sauces ?? [] })));
         setOpenOrderId(order.id);
         refetchSuspended();
         setModalOpen(true);
@@ -261,6 +307,7 @@ export function usePosOrderSession(workspace, catalog) {
         setPaymentMethod,
         discountAmount,
         setDiscountAmount,
+        toggleItemSauce,
         orderNote,
         setOrderNote,
         orderOwnerName,
@@ -280,6 +327,8 @@ export function usePosOrderSession(workspace, catalog) {
         autoPrint,
         toggleAutoPrint,
         setOrderTypeAndDefaults,
+        validateTakeawayCustomer,
+        applyCustomerSuggestion,
         addProduct,
         updateQuantity,
         updateNote,

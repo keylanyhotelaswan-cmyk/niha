@@ -21,8 +21,32 @@ export async function apiCollectorSummary(branchId: string, date?: string, token
   return apiGet(`/shifts/collector-summary?${params}`, token);
 }
 
-export async function apiCloseShift(dto: { shiftId: string; countedCash: number; note?: string }, token?: string) {
+export async function apiCloseShift(dto: {
+  shiftId: string;
+  countedCash: number;
+  note?: string;
+  handoffMode?: 'successor' | 'existing';
+  targetShiftId?: string;
+  successorCashBoxId?: string;
+  successorOpeningFloat?: number;
+}, token?: string) {
   return apiPost('/shifts/close', dto, token);
+}
+
+export async function apiShiftHandoffOptions(shiftId: string, token?: string) {
+  return apiGet<{
+    shift: { id: string; shiftNumber: string; cashBoxId: string; cashBoxName: string; cashierName: string };
+    pending: { uncollectedCount: number; suspendedCount: number; openCount: number; total: number };
+    openShifts: Array<{
+      id: string;
+      shiftNumber: string;
+      cashierName: string;
+      cashBoxId: string;
+      cashBoxName: string;
+      openedAt: string;
+    }>;
+    cashBoxes: Array<{ id: string; name: string; code: string }>;
+  }>(`/shifts/handoff-options?shiftId=${shiftId}`, token);
 }
 
 export async function apiCurrentShift(branchId: string, cashBoxId: string, token?: string) {
@@ -188,6 +212,63 @@ export async function apiVoidOrder(orderId: string, reason?: string, token?: str
   return apiPost(`/orders/${orderId}/void`, { reason }, token);
 }
 
+export async function apiGetOrderAuditLogs(orderId: string, token?: string) {
+  return apiGet(`/orders/${orderId}/audit-logs`, token);
+}
+
+export async function apiGetOrder(orderId: string, token?: string) {
+  return apiGet(`/orders/${orderId}`, token);
+}
+
+export async function apiListAuditLogs(query: string, token?: string) {
+  return apiGet(`/audit/logs?${query}`, token);
+}
+
+export async function apiAmendOrder(
+  orderId: string,
+  dto: {
+    customerName?: string;
+    customerPhone?: string;
+    customerAddress?: string;
+    captainName?: string;
+    note?: string;
+    items?: Array<{ productId: string; quantity: number; unitPrice: number; note?: string }>;
+  },
+  token?: string,
+) {
+  return apiPost(`/orders/${orderId}/amend`, dto, token);
+}
+
+export async function apiUncollectOrder(orderId: string, token?: string) {
+  return apiPost(`/orders/${orderId}/uncollect`, {}, token);
+}
+
+export async function apiCancelClosedOrder(orderId: string, reason?: string, token?: string) {
+  return apiPost(`/orders/${orderId}/cancel`, { reason }, token);
+}
+
+export async function apiRequestCancelOrder(orderId: string, reason?: string, token?: string) {
+  return apiPost(`/orders/${orderId}/cancel-request`, { reason }, token);
+}
+
+export async function apiWithdrawCancelRequest(orderId: string, token?: string) {
+  return apiPost(`/orders/${orderId}/cancel-request/withdraw`, {}, token);
+}
+
+export async function apiListPendingCancellations(branchId: string, shiftId?: string, token?: string) {
+  const params = new URLSearchParams({ branchId });
+  if (shiftId) params.set('shiftId', shiftId);
+  return apiGet(`/orders/pending-cancellations?${params}`, token);
+}
+
+export async function apiApproveOrderCancellation(orderId: string, token?: string) {
+  return apiPost(`/orders/${orderId}/cancel-request/approve`, {}, token);
+}
+
+export async function apiRejectOrderCancellation(orderId: string, reason?: string, token?: string) {
+  return apiPost(`/orders/${orderId}/cancel-request/reject`, { reason }, token);
+}
+
 export async function apiCreateOpenOrder(dto: {
   branchId: string;
   cashBoxId?: string;
@@ -225,4 +306,52 @@ export async function apiListCashBoxes(branchId: string, token?: string) {
 
 export async function apiListPaymentMethods(branchId: string, token?: string) {
   return apiGet(`/payment-methods?branchId=${branchId}`, token);
+}
+
+export async function apiSearchCustomers(branchId: string, q: string, token?: string) {
+  const params = new URLSearchParams({ branchId, q });
+  return apiGet<Array<{
+    id: string;
+    phone: string;
+    name: string | null;
+    address: string | null;
+    isRegular: boolean;
+    orderCount: number;
+    lastOrderAt: string | null;
+  }>>(`/customers/search?${params}`, token);
+}
+
+export async function apiSearchDeliveryCaptains(branchId: string, q: string, token?: string) {
+  const params = new URLSearchParams({ branchId });
+  if (q.trim()) params.set('q', q.trim());
+  return apiGet<Array<{
+    name: string;
+    orderCount: number;
+    lastOrderAt: string | null;
+  }>>(`/orders/delivery-captains/search?${params}`, token);
+}
+
+export async function apiListCustomers(
+  branchId: string,
+  opts?: { q?: string; regularOnly?: boolean; skip?: number; take?: number },
+  token?: string,
+) {
+  const params = new URLSearchParams({ branchId });
+  if (opts?.q) params.set('q', opts.q);
+  if (opts?.regularOnly) params.set('regularOnly', '1');
+  if (opts?.skip != null) params.set('skip', String(opts.skip));
+  if (opts?.take != null) params.set('take', String(opts.take));
+  return apiGet<{ items: any[]; total: number }>(`/customers?${params}`, token);
+}
+
+export async function apiGetCustomer(id: string, token?: string) {
+  return apiGet<any>(`/customers/${id}`, token);
+}
+
+export async function apiUpdateCustomer(
+  id: string,
+  dto: { name?: string; address?: string; isRegular?: boolean; notes?: string },
+  token?: string,
+) {
+  return apiPut(`/customers/${id}`, dto, token);
 }

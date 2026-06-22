@@ -16,7 +16,7 @@ import {
 import { useState } from 'react';
 import { MetricCard, SectionCard } from '../../shared.js';
 import { useAuth } from '../../../lib/auth-context.js';
-import { apiCreateMovement, apiOpenShift } from '../../../lib/api.js';
+import { apiCreateMovement, apiGetOrder, apiOpenShift } from '../../../lib/api.js';
 import {
   isIncomingTransaction,
   mapMovementTypeToApi,
@@ -24,8 +24,15 @@ import {
   safeTypeLabel,
   treasuryTypeLabel,
 } from '../../../lib/treasury-store.js';
+import { formatShiftDuration, formatShiftOpenedAt } from '../../../lib/shift-summary-utils.js';
 import { ShiftCloseDialog } from '../components/shift-close-dialog.js';
+import { ShiftCollectionBreakdown } from '../components/shift-collection-breakdown.js';
+import { ShiftSummaryPreviewDialog } from '../components/shift-summary-preview-dialog.js';
+import type { ShiftSummaryPrintParams } from '../../../lib/shift-summary-print.js';
 import { useShiftMutations } from '../../../lib/hooks.js';
+import { OrderSummaryDialog } from '../../pos/components/order-summary-dialog.js';
+import { mapApiOrderToSavedOrder } from '../../../lib/pos-store.js';
+import type { SavedOrder } from '../../../lib/pos-store.js';
 
 const manualMovementOptions = [
   { value: 'CASH_DEPOSIT', label: 'إيداع نقدي' },
@@ -59,16 +66,47 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
   const [movementAmount, setMovementAmount] = useState('0');
   const [movementNote, setMovementNote] = useState('');
   const [closeOpen, setCloseOpen] = useState(false);
+  const [orderDialog, setOrderDialog] = useState<SavedOrder | null>(null);
+  const [orderLoadingId, setOrderLoadingId] = useState<string | null>(null);
+  const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
 
   const expectedCash = Number(summary?.expectedCash ?? 0);
   const cashierName = shift?.openedBy?.fullName ?? '—';
 
+  const summaryPreviewParams: ShiftSummaryPrintParams | null = summary ? {
+    shiftNumber: shift?.shiftNumber,
+    cashierName,
+    openedAt: shift?.openedAt,
+    summary,
+  } : null;
+
+  const openSummaryPreview = () => {
+    if (!summary) return;
+    setSummaryPreviewOpen(true);
+  };
+
   const treasuryStats = [
-    { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'وردية نشطة' : '—', progress: 100, tone: '#0f766e' },
-    { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج — يزيد بالتحصيل وينقص بالاعتماد', progress: 76, tone: '#155e75' },
-    { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: 'كل طرق الدفع', progress: 68, tone: '#7c3aed' },
-    { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: '#b45309' },
+    { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: '#0f766e' },
+    { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج الآن', progress: 76, tone: '#155e75' },
+    { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: summary?.ordersCount != null ? `${summary.ordersCount} طلب مغلق` : 'كل طرق الدفع', progress: 68, tone: '#7c3aed' },
+    { label: 'مصروفات الوردية', value: `${Number(summary?.expensesTotal ?? summary?.outgoing ?? 0).toLocaleString('en-US')} ج.م`, note: 'تُخصم من عهدة الكاشير', progress: 52, tone: '#b45309' },
+    { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: '#be123c' },
   ];
+
+  const openOrderFromTx = async (tx: { orderId?: string | null; paymentMethod?: string }) => {
+    if (!tx.orderId || !accessToken) return;
+    setOrderLoadingId(tx.orderId);
+    try {
+      const res = await apiGetOrder(tx.orderId, accessToken);
+      if (!res.ok || !res.data) {
+        onMessage(res.body ?? res.error ?? 'فشل تحميل الفاتورة');
+        return;
+      }
+      setOrderDialog(mapApiOrderToSavedOrder(res.data as Parameters<typeof mapApiOrderToSavedOrder>[0], 'closed'));
+    } finally {
+      setOrderLoadingId(null);
+    }
+  };
 
   const toggleShift = async () => {
     if (!accessToken || !branchId || !cashBoxId) return;
@@ -112,15 +150,30 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
     }
   };
 
-  const handleCloseShift = async (countedCash: number) => {
+  const handleCloseShift = async (payload: {
+    countedCash: number;
+    handoffMode?: 'successor' | 'existing';
+    targetShiftId?: string;
+    successorCashBoxId?: string;
+    successorOpeningFloat?: number;
+  }) => {
     if (!shift) return;
     try {
-      await closeShift.mutateAsync({
+      const result = await closeShift.mutateAsync({
         shiftId: shift.id,
-        countedCash,
+        countedCash: payload.countedCash,
         note: 'إغلاق وردية من مساحة الخزنة',
+        ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+        ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
+        ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
+        ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
       });
-      onMessage('تم إغلاق الوردية.');
+      const handoff = (result as any)?.handoff;
+      if (handoff?.transferredCount > 0) {
+        onMessage(`تم التسليم: ${handoff.transferredCount} طلب → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`);
+      } else {
+        onMessage('تم إغلاق الوردية.');
+      }
       onRefresh();
     } catch (e) {
       onMessage((e as Error).message ?? 'فشل إغلاق الوردية');
@@ -131,25 +184,45 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
   return (
     <Stack spacing={2}>
       <SectionCard
-        title="الوردية الحالية"
-        action={<Chip label={shiftOpen ? 'مفتوحة' : 'مغلقة'} color={shiftOpen ? 'success' : 'default'} />}
+        title="الوردية المفتوحة"
+        action={(
+          <Stack direction="row" spacing={1} alignItems="center">
+            {shiftOpen ? (
+              <Button size="small" variant="outlined" onClick={openSummaryPreview}>
+                ملخص الوردية
+              </Button>
+            ) : null}
+            <Chip label={shiftOpen ? 'مفتوحة' : 'مغلقة'} color={shiftOpen ? 'success' : 'default'} />
+          </Stack>
+        )}
       >
         <Stack spacing={1}>
           <Typography variant="body2" color="text.secondary">
             {shift
-              ? `${shift.shiftNumber} · ${cashierName} · ${new Date(shift.openedAt).toLocaleString('ar-EG')}`
+              ? `${shift.shiftNumber} · ${cashierName} · فتح ${formatShiftOpenedAt(shift.openedAt)} · مدة ${formatShiftDuration(shift.openedAt)}`
               : 'لا توجد وردية مفتوحة على هذه الخزنة'}
           </Typography>
+          {shiftOpen ? (
+            <Typography variant="caption" color="text.secondary">
+              الملخص يشمل كل حركات الوردية من لحظة الفتح حتى الإغلاق — بدون تقسيم يومي.
+            </Typography>
+          ) : null}
         </Stack>
       </SectionCard>
 
       <Grid2 container spacing={2}>
         {treasuryStats.map((stat) => (
-          <Grid2 size={{ xs: 12, sm: 6, xl: 3 }} key={stat.label}>
+          <Grid2 size={{ xs: 12, sm: 6, md: 4 }} key={stat.label}>
             <MetricCard {...stat} />
           </Grid2>
         ))}
       </Grid2>
+
+      {shiftOpen && summary ? (
+        <SectionCard title="تحصيل الوردية حسب طريقة الدفع">
+          <ShiftCollectionBreakdown summary={summary} />
+        </SectionCard>
+      ) : null}
 
       {perms.canManageShift ? (
         <Grid2 container spacing={2}>
@@ -238,12 +311,32 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
           <TableBody>
             {transactions.map((tx: any) => {
               const incoming = isIncomingTransaction(tx.transactionType);
+              const hasOrder = Boolean(tx.orderId);
               return (
-                <TableRow key={tx.id} hover>
+                <TableRow
+                  key={tx.id}
+                  hover={hasOrder}
+                  {...(hasOrder ? {
+                    onClick: () => { void openOrderFromTx(tx); },
+                    sx: { cursor: orderLoadingId === tx.orderId ? 'wait' : 'pointer' },
+                  } : {})}
+                >
                   <TableCell>{new Date(tx.occurredAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</TableCell>
                   <TableCell>{treasuryTypeLabel(tx.transactionType, tx.sourceType)}</TableCell>
                   <TableCell>{safeTypeLabel(tx.safeType)}</TableCell>
-                  <TableCell>{tx.note}</TableCell>
+                  <TableCell>
+                    {hasOrder ? (
+                      <Typography
+                        component="span"
+                        variant="body2"
+                        sx={{ color: 'primary.main', fontWeight: 700, textDecoration: 'underline' }}
+                      >
+                        {tx.orderNumber ? `فاتورة ${tx.orderNumber}` : tx.note}
+                      </Typography>
+                    ) : (
+                      tx.note
+                    )}
+                  </TableCell>
                   <TableCell>{paymentMethodLabel(tx.paymentMethod)}</TableCell>
                   <TableCell align="left" sx={{ color: incoming ? '#0f766e' : '#b45309', fontWeight: 700 }}>
                     {incoming ? '+' : '-'} {Number(tx.amount).toLocaleString('en-US')} ج.م
@@ -254,15 +347,36 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
           </TableBody>
         </Table>
         {transactions.length === 0 ? <Alert severity="info" sx={{ mt: 1 }}>لا توجد حركات.</Alert> : null}
+        {transactions.some((tx: any) => tx.orderId) ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            اضغط على رقم الفاتورة لعرض تفاصيل الطلب.
+          </Typography>
+        ) : null}
       </SectionCard>
+
+      <OrderSummaryDialog
+        open={Boolean(orderDialog)}
+        order={orderDialog}
+        onClose={() => setOrderDialog(null)}
+      />
+
+      <ShiftSummaryPreviewDialog
+        open={summaryPreviewOpen}
+        onClose={() => setSummaryPreviewOpen(false)}
+        params={summaryPreviewParams}
+        onMessage={onMessage}
+      />
 
       <ShiftCloseDialog
         open={closeOpen}
         onClose={() => setCloseOpen(false)}
         onConfirm={handleCloseShift}
+        shiftId={shift?.id}
         summary={summary}
         shiftNumber={shift?.shiftNumber}
         cashierName={cashierName}
+        openedAt={shift?.openedAt}
+        onOpenSummaryPreview={openSummaryPreview}
       />
     </Stack>
   );

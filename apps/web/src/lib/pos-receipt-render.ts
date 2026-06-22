@@ -8,6 +8,7 @@ import {
   scaledFont,
   type ReceiptSettings,
 } from './pos-receipt-settings.js';
+import { formatReceiptItemName } from './pos-order-sauces.js';
 
 const html2canvas = (html2canvasPkg as unknown as typeof html2canvasPkg & ((el: HTMLElement, opts?: object) => Promise<HTMLCanvasElement>));
 const capture = typeof html2canvas === 'function'
@@ -164,6 +165,12 @@ function formatOrderTypeLabel(orderType: string) {
   return 'محلي';
 }
 
+/** يظهر نوع الطلب في الفاتورة فقط للتيك أواي والتوصيل */
+function shouldShowOrderTypeLabel(orderType: string) {
+  const label = formatOrderTypeLabel(orderType);
+  return label !== 'محلي';
+}
+
 /** تسمية طريقة الدفع للفاتورة */
 export function formatReceiptPaymentMethod(method: string): string {
   const raw = method.trim();
@@ -208,7 +215,7 @@ export type CustomerReceiptInput = {
   customerPhone?: string;
   customerAddress?: string;
   captainName?: string;
-  items: Array<{ name: string; quantity: number; unitPrice: number; lineTotal: number; note?: string }>;
+  items: Array<{ name: string; quantity: number; unitPrice: number; lineTotal: number; note?: string; sauces?: string[] }>;
   discount: number;
   total: number;
   note?: string;
@@ -234,14 +241,12 @@ export function buildCustomerReceiptHtml(data: CustomerReceiptInput, settings = 
   const subtitle = data.storeSubtitle ?? settings.storeSubtitle;
 
   const itemRows = data.items.map((item) => {
-    const noteRow = item.note
-      ? `<tr><td colspan="3" style="font-size:${scaledFont(settings.fontBody - 2, settings)}px;color:#333;padding-bottom:4px">↳ ${escapeHtml(item.note)}</td></tr>`
-      : '';
+    const displayName = formatReceiptItemName(item.name, item.note ?? '', item.sauces, { includeSauces: false });
     return `<tr>
       <td class="qty">${item.quantity}×</td>
-      <td class="name">${escapeHtml(item.name)}</td>
+      <td class="name">${escapeHtml(displayName)}</td>
       <td class="price">${formatMoney(item.lineTotal)}</td>
-    </tr>${noteRow}`;
+    </tr>`;
   }).join('');
 
   const pmLabel = formatReceiptPaymentMethod(data.paymentMethod);
@@ -258,7 +263,7 @@ export function buildCustomerReceiptHtml(data: CustomerReceiptInput, settings = 
       <section class="meta">
         <div class="meta-line">فاتورة #${invoiceNo}</div>
         <div class="meta-line">${formatReceiptDate(data.createdAt)}</div>
-        <div class="meta-line">كاشير: ${escapeHtml(data.cashierName)} · ${formatOrderTypeLabel(data.orderType)}</div>
+        <div class="meta-line">كاشير: ${escapeHtml(data.cashierName)}${shouldShowOrderTypeLabel(data.orderType) ? ` · ${formatOrderTypeLabel(data.orderType)}` : ''}</div>
         ${data.customerName ? `<div class="meta-line">العميل: ${escapeHtml(data.customerName)}</div>` : ''}
         ${data.customerPhone ? `<div class="meta-line" style="direction:ltr">${escapeHtml(data.customerPhone)}</div>` : ''}
         ${data.customerAddress ? `<div class="meta-line meta-address">العنوان: ${escapeHtml(data.customerAddress.trim())}</div>` : ''}
@@ -288,8 +293,9 @@ export function buildCustomerReceiptHtml(data: CustomerReceiptInput, settings = 
 export function buildKitchenReceiptHtml(data: KitchenReceiptInput, settings = getReceiptSettings(), forPrint = true): string {
   const orderNo = kitchenDisplayNumber(data.orderNumber);
   const items = data.items.map((item) => {
-    const note = item.note ? `<div class="k-note">↳ ${escapeHtml(item.note)}</div>` : '';
-    return `${note}<div class="k-item">${item.quantity} &nbsp; ${escapeHtml(item.name)}</div>`;
+    const note = item.note?.trim();
+    const displayName = note ? `${item.name} (${note})` : item.name;
+    return `<div class="k-item">${item.quantity} &nbsp; ${escapeHtml(displayName)}</div>`;
   }).join('');
 
   const body = `
@@ -297,7 +303,7 @@ export function buildKitchenReceiptHtml(data: KitchenReceiptInput, settings = ge
       <div class="k-num">${escapeHtml(orderNo)}</div>
       <div class="k-label">مطبخ</div>
       <div class="k-date">${formatReceiptDate(data.createdAt)}</div>
-      <div class="k-type">${formatOrderTypeLabel(data.orderType)}</div>
+      ${shouldShowOrderTypeLabel(data.orderType) ? `<div class="k-type">${formatOrderTypeLabel(data.orderType)}</div>` : ''}
       ${data.customerName ? `<div class="k-note">العميل: ${escapeHtml(data.customerName)}</div>` : ''}
       ${data.customerPhone ? `<div class="k-note" style="direction:ltr">${escapeHtml(data.customerPhone)}</div>` : ''}
       ${data.customerAddress ? `<div class="k-note meta-address">العنوان: ${escapeHtml(data.customerAddress.trim())}</div>` : ''}
@@ -348,7 +354,15 @@ export async function renderHtmlToPng(
   doc.write(fullHtml);
   doc.close();
 
-  await new Promise((r) => setTimeout(r, 400));
+  await new Promise<void>((resolve) => {
+    const done = () => resolve();
+    if (iframe.contentWindow?.document?.readyState === 'complete') {
+      requestAnimationFrame(() => setTimeout(done, 80));
+      return;
+    }
+    iframe.onload = () => requestAnimationFrame(() => setTimeout(done, 80));
+    setTimeout(done, 200);
+  });
 
   const slipEl = doc.querySelector('.slip') as HTMLElement | null;
   const target = slipEl ?? doc.querySelector('.receipt') ?? doc.body;

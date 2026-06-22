@@ -8,7 +8,7 @@
     "dev:watch": "nest start --watch",
     "build": "npx nest build",
     "start": "node dist/main.js",
-    "lint": "eslint \"src/**/*.ts\"",
+    "lint": "tsc -p tsconfig.json --noEmit",
     "test": "jest",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

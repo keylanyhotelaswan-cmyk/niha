@@ -24,13 +24,32 @@ export function SettingsHubPage() {
             meta: `${receipt.paperWidthMm}mm · بالطول · هامش ${receipt.marginMm}mm · ${receipt.paperSize}`,
         },
         {
+            title: 'سجل النشاط',
+            description: 'سجل عام لكل الحركات — إنشاء وتعديل وإلغاء الفواتير وغيرها.',
+            path: '/settings/audit-log',
+            permission: 'treasury.manage',
+        },
+        {
+            title: 'العملاء',
+            description: 'سجل الزبائن، البحث بالهاتف، وتمييز العملاء الدائمين.',
+            path: '/customers',
+            permissionAny: ['customers.read', 'treasury.manage', 'pos.use'],
+        },
+        {
             title: 'المستخدمين والصلاحيات',
             description: 'إضافة مستخدمين، الأدوار، وحذف الحسابات.',
             path: '/settings/users',
             permission: 'users.manage',
         },
     ];
-    const visible = cards.filter((c) => !c.permission || granted.includes(c.permission));
+    const visible = cards.filter((c) => {
+        const granted = permissions?.map((p) => p.code) ?? [];
+        if (c.permissionAny?.length)
+            return c.permissionAny.some((code) => granted.includes(code));
+        if (!c.permission)
+            return true;
+        return granted.includes(c.permission);
+    });
     return (_jsxs(Stack, { spacing: 2, children: [_jsx(Typography, { variant: "body1", color: "text.secondary", children: "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0633\u0645 \u0627\u0644\u0644\u064A \u0639\u0627\u064A\u0632 \u062A\u0639\u062F\u0651\u0644\u0647:" }), _jsx(Grid, { container: true, spacing: 2, children: visible.map((card) => (_jsx(Grid, { item: true, xs: 12, md: 6, children: _jsxs(Paper, { sx: {
                             p: 2.5,
                             height: '100%',

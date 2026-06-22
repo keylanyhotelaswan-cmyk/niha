@@ -17,7 +17,7 @@ export class ProductsController {
   }
 
   @Get()
-  @RequirePermissions('products.read')
+  @RequirePermissions('pos.use', 'inventory.manage')
   findAll(
     @Query('branchId') branchId: string,
     @Query('categoryId') categoryId?: string,

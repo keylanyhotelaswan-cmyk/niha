@@ -6,6 +6,7 @@ import { useAuth } from '../../lib/auth-context.js';
 import {
   invalidatePosQueries,
   patchPosCachesAfterAutoOpen,
+  patchShiftOrderCollected,
   refetchPosOrderData,
   useBranches,
   useCashBoxes,
@@ -16,6 +17,7 @@ import {
   useShiftMutations,
   useSuspendedOrders,
 } from '../../lib/hooks.js';
+import { readPosContextCache } from '../../lib/pos-cache.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
 import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
 import {
@@ -32,7 +34,10 @@ export function usePosWorkspace() {
   const queryClient = useQueryClient();
   const { accessToken, user, permissions } = useAuth();
 
-  const { data: posContext, refetch: refetchPosContext, isPending: posContextPending, isError: posContextError, error: posContextErrorDetail } = usePosContext();
+  const { data: posContext, refetch: refetchPosContext, isPending: posContextPending, isError: posContextError, error: posContextErrorDetail, isFetching: posContextFetching } = usePosContext();
+  const cachedContext = readPosContextCache() as { shiftOpen?: boolean; shift?: unknown } | undefined;
+  const cachedShiftOpen = Boolean(cachedContext?.shiftOpen);
+  const shiftStatusPending = posContextPending && !posContext;
   const { data: branchList = [] } = useBranches();
   const [branchId, setBranchId] = useState(() => readPosBranchId());
   const [selectedCashBoxId, setSelectedCashBoxId] = useState('');
@@ -41,7 +46,12 @@ export function usePosWorkspace() {
   const { data: cashBoxes = [] } = useCashBoxes(effectiveBranchId);
   const contextCashBoxId = posContext?.cashBox?.id ?? '';
   const queryCashBoxId = selectedCashBoxId || contextCashBoxId || cashBoxes[0]?.id || '';
-  const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, queryCashBoxId);
+  const hasContextShift = Boolean(posContext?.shiftOpen && posContext?.shift);
+  const { data: shiftData, refetch: refetchShift } = useCurrentShift(
+    effectiveBranchId,
+    queryCashBoxId,
+    !posContextPending && !hasContextShift,
+  );
 
   const shift = useMemo(() => {
     if (shiftData?.shiftOpen && shiftData.shift) return shiftData.shift;
@@ -54,7 +64,10 @@ export function usePosWorkspace() {
   const effectiveShiftId = shiftOpen && shift?.id ? shift.id : '';
   const cashBoxId = shift?.cashBoxId ?? posContext?.cashBox?.id ?? selectedCashBoxId;
 
-  const { data: posSummaryFetched, refetch: refetchPosSummary, isPending: posSummaryPending, isError: posSummaryError } = usePosShiftSummary(effectiveShiftId);
+  const { data: posSummaryFetched, refetch: refetchPosSummary, isPending: posSummaryPending, isError: posSummaryError } = usePosShiftSummary(
+    effectiveShiftId || undefined,
+    posContext?.posSummary,
+  );
   const posSummary = posSummaryFetched ?? posContext?.posSummary ?? null;
   const treasurySummary = shiftData?.summary ?? posContext?.summary ?? null;
   const closeShiftSummary = posSummary ?? (treasurySummary
@@ -63,7 +76,12 @@ export function usePosWorkspace() {
         openingFloat: treasurySummary.openingFloat,
         totalSales: treasurySummary.totalSales,
         pending: treasurySummary.pending ?? treasurySummary.pendingCashInCustody,
+        pendingCashInCustody: treasurySummary.pendingCashInCustody,
+        expensesTotal: treasurySummary.expensesTotal,
+        ordersCount: treasurySummary.ordersCount,
         byPaymentMethod: treasurySummary.byPaymentMethod,
+        salesByMethod: treasurySummary.salesByMethod,
+        outgoing: treasurySummary.outgoing,
       }
     : null);
 
@@ -126,10 +144,16 @@ export function usePosWorkspace() {
     return fromSummary ?? shiftOrdersRaw;
   }, [shiftOrdersRaw, posSummary, posContext]);
 
-  const shiftClosedOrders = useMemo<SavedOrder[]>(
-    () => shiftClosedOrdersSource.map((o: any) => mapApiOrderToSavedOrder(o, 'closed')),
-    [shiftClosedOrdersSource],
-  );
+  const shiftClosedOrders = useMemo<SavedOrder[]>(() => {
+    const seen = new Set<string>();
+    return shiftClosedOrdersSource
+      .map((o: any) => mapApiOrderToSavedOrder(o, 'closed'))
+      .filter((o: SavedOrder) => {
+        if (seen.has(o.id)) return false;
+        seen.add(o.id);
+        return true;
+      });
+  }, [shiftClosedOrdersSource]);
 
   const shiftOrdersShowError = shiftOrdersError && shiftClosedOrders.length === 0;
 
@@ -155,7 +179,6 @@ export function usePosWorkspace() {
     if (id) {
       await refetchPosOrderData(queryClient, id);
     }
-    await refetchPosContext();
   };
 
   const refreshAll = async () => {
@@ -208,22 +231,44 @@ export function usePosWorkspace() {
     return res;
   };
 
-  const closeShiftSession = async (countedCash: number) => {
+  const closeShiftSession = async (payload: {
+    countedCash: number;
+    handoffMode?: 'successor' | 'existing';
+    targetShiftId?: string;
+    successorCashBoxId?: string;
+    successorOpeningFloat?: number;
+  }) => {
     if (!shift?.id) return { ok: false, error: 'لا توجد وردية' };
     if (!shiftOwned && !canManageShift) {
       return { ok: false, error: 'لا يمكنك إغلاق وردية مستخدم آخر' };
     }
     try {
-      await closeShift.mutateAsync({ shiftId: shift.id, countedCash });
+      const result = await closeShift.mutateAsync({
+        shiftId: shift.id,
+        countedCash: payload.countedCash,
+        ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+        ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
+        ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
+        ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
+      });
       invalidatePosQueries(queryClient);
       await refreshAll();
-      return { ok: true };
+      const handoff = (result as any)?.handoff;
+      const successor = (result as any)?.successorShift;
+      let message = 'تم إغلاق الوردية.';
+      if (handoff?.transferredCount > 0) {
+        message = `تم التسليم: ${handoff.transferredCount} طلب/سلة → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`;
+      }
+      if (successor) {
+        message += ` وردية جديدة ${successor.shiftNumber} مفتوحة.`;
+      }
+      return { ok: true, message };
     } catch (e) {
       const message = (e as Error).message ?? 'فشل إغلاق الوردية';
       if (message.includes('مغلقة بالفعل')) {
         invalidatePosQueries(queryClient);
         await refreshAll();
-        return { ok: true };
+        return { ok: true, message: 'الوردية مغلقة.' };
       }
       return { ok: false, error: message };
     }
@@ -231,12 +276,18 @@ export function usePosWorkspace() {
 
   const collectOrder = async (order: SavedOrder, paymentMethodId: string) => {
     if (!accessToken) return { ok: false, error: 'غير مسجل' };
+    const shiftId = order.id && effectiveShiftId ? effectiveShiftId : shift?.id;
+    if (shiftId) {
+      patchShiftOrderCollected(queryClient, shiftId, order.id);
+    }
     const res = await apiCollectClosedOrder(order.id, {
       paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
       amount: order.total,
     }, accessToken);
     if (res.ok) {
-      await refreshAfterOrder();
+      void refetchPosOrderData(queryClient, shiftId ?? effectiveShiftId);
+    } else if (shiftId) {
+      void queryClient.invalidateQueries({ queryKey: ['orders-shift-closed', shiftId] });
     }
     return res;
   };
@@ -264,7 +315,7 @@ export function usePosWorkspace() {
       ...(dto.note ? { note: dto.note } : {}),
     }, accessToken);
     if (res.ok) {
-      await refreshAfterOrder();
+      void refreshAfterOrder();
     }
     return res;
   };
@@ -276,6 +327,9 @@ export function usePosWorkspace() {
     printingEnabled,
     posContext,
     posContextPending,
+    posContextFetching,
+    shiftStatusPending,
+    cachedShiftOpen,
     posContextError,
     posContextErrorDetail,
     branchList,
