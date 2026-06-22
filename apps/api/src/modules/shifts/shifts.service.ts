@@ -262,13 +262,13 @@ export class ShiftsService {
         shiftNumber: shift.shiftNumber,
         cashBoxId: shift.cashBoxId,
         cashBoxName: shift.cashBox.name,
-        cashierName: shift.openedBy.fullName,
+        cashierName: shift.openedBy.fullName ?? shift.openedBy.username ?? '—',
       },
       pending,
       openShifts: openShifts.map((s) => ({
         id: s.id,
         shiftNumber: s.shiftNumber,
-        cashierName: s.openedBy.fullName,
+        cashierName: s.openedBy.fullName ?? s.openedBy.username ?? '—',
         cashBoxId: s.cashBoxId,
         cashBoxName: s.cashBox.name,
         openedAt: s.openedAt.toISOString(),
@@ -349,6 +349,16 @@ export class ShiftsService {
     const closedAt = new Date();
     const summary = await this.treasuryService.getShiftSummary(closeDto.shiftId);
     const handoffNote = closeDto.note?.trim() ?? null;
+    const transferPlan = closeDto.handoffMode && pending.total > 0
+      ? await this.planOrderHandoff({
+          sourceShiftId: closeDto.shiftId,
+          ...(closeDto.handoffMode === 'existing' && closeDto.targetShiftId
+            ? { targetShiftId: closeDto.targetShiftId }
+            : {}),
+          organizationId: branch.organizationId,
+          branchId: shiftRecord.branchId,
+        })
+      : null;
 
     const txResult = await this.prisma.$transaction(async (tx) => {
       const shift = await tx.shift.update({
@@ -399,16 +409,25 @@ export class ShiftsService {
         });
         targetShiftId = successor.id;
         targetShiftNumber = successor.shiftNumber;
+
+        if (openingFloat > 0) {
+          await this.recordShiftOpenFloatTx(tx, {
+            branchId: shiftRecord.branchId,
+            cashBoxId: successor.cashBoxId,
+            shiftId: successor.id,
+            amount: openingFloat,
+            note: `تسليم عهدة من وردية ${shiftRecord.shiftNumber}`,
+            occurredAt: closedAt,
+          });
+        }
       }
 
       if (closeDto.handoffMode && targetShiftId && targetCashBoxId && pending.total > 0) {
         transferredCount = await this.transferPendingOrders({
           tx,
-          sourceShiftId: closeDto.shiftId,
           targetShiftId,
           targetCashBoxId,
-          branchId: shiftRecord.branchId,
-          organizationId: branch.organizationId,
+          transfers: transferPlan ?? [],
         });
       }
 
@@ -425,27 +444,7 @@ export class ShiftsService {
       }
 
       return { shift, closing, successor, transferredCount };
-    });
-
-    if (txResult.successor) {
-      const openingFloat = closeDto.successorOpeningFloat ?? closeDto.countedCash;
-      if (openingFloat > 0) {
-        await this.treasuryService.recordTransaction({
-          branchId: shiftRecord.branchId,
-          cashBoxId: txResult.successor.cashBoxId,
-          shiftId: txResult.successor.id,
-          transactionType: 'SHIFT_OPEN_FLOAT',
-          paymentMethod: 'CASH',
-          amount: openingFloat,
-          sourceType: 'SHIFT',
-          sourceId: txResult.successor.id,
-          note: `تسليم عهدة من وردية ${shiftRecord.shiftNumber}`,
-          approvalStatus: 'APPROVED',
-          collectionStatus: 'APPROVED',
-          affectsCash: true,
-        });
-      }
-    }
+    }, { maxWait: 15_000, timeout: 120_000 });
 
     return {
       shift: txResult.shift,
@@ -482,16 +481,40 @@ export class ShiftsService {
     };
   }
 
-  private async transferPendingOrders(params: {
-    tx: Prisma.TransactionClient;
-    sourceShiftId: string;
-    targetShiftId: string;
-    targetCashBoxId: string;
-    branchId: string;
-    organizationId: string;
-  }) {
-    const pendingWhere: Prisma.OrderWhereInput = {
-      shiftId: params.sourceShiftId,
+  private recordShiftOpenFloatTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      branchId: string;
+      cashBoxId: string;
+      shiftId: string;
+      amount: number;
+      note: string;
+      occurredAt: Date;
+    },
+  ) {
+    return tx.treasuryTransaction.create({
+      data: {
+        branchId: params.branchId,
+        cashBoxId: params.cashBoxId,
+        shiftId: params.shiftId,
+        safeType: 'EXPENSES',
+        transactionType: 'SHIFT_OPEN_FLOAT',
+        paymentMethod: 'CASH',
+        amount: params.amount,
+        sourceType: 'SHIFT',
+        sourceId: params.shiftId,
+        note: params.note,
+        approvalStatus: 'APPROVED',
+        collectionStatus: 'APPROVED',
+        affectsCash: true,
+        occurredAt: params.occurredAt,
+      },
+    });
+  }
+
+  private pendingOrdersWhere(sourceShiftId: string): Prisma.OrderWhereInput {
+    return {
+      shiftId: sourceShiftId,
       OR: [
         { status: 'SUSPENDED' },
         { status: 'OPEN' },
@@ -501,48 +524,77 @@ export class ShiftsService {
         },
       ],
     };
+  }
 
-    const orders = await params.tx.order.findMany({
-      where: pendingWhere,
+  private async planOrderHandoff(params: {
+    sourceShiftId: string;
+    targetShiftId?: string;
+    organizationId: string;
+    branchId: string;
+  }) {
+    const orders = await this.prisma.order.findMany({
+      where: this.pendingOrdersWhere(params.sourceShiftId),
       select: { id: true, orderNumber: true },
     });
-    if (!orders.length) return 0;
+    if (!orders.length) return [];
 
     const existingNumbers = new Set(
-      (
-        await params.tx.order.findMany({
-          where: { shiftId: params.targetShiftId },
-          select: { orderNumber: true },
-        })
-      ).map((o) => o.orderNumber),
+      params.targetShiftId
+        ? (
+            await this.prisma.order.findMany({
+              where: { shiftId: params.targetShiftId },
+              select: { orderNumber: true },
+            })
+          ).map((o) => o.orderNumber)
+        : [],
     );
 
+    const transfers: Array<{ orderId: string; orderNumber: string; previousOrderNumber: string }> = [];
     for (const order of orders) {
       let orderNumber = order.orderNumber;
       if (existingNumbers.has(orderNumber)) {
         orderNumber = await this.sequenceService.getNextShiftOrderNumber(
           params.organizationId,
           params.branchId,
-          params.targetShiftId,
+          params.targetShiftId ?? params.sourceShiftId,
         );
       }
       existingNumbers.add(orderNumber);
+      transfers.push({ orderId: order.id, orderNumber, previousOrderNumber: order.orderNumber });
+    }
+    return transfers;
+  }
 
+  private async transferPendingOrders(params: {
+    tx: Prisma.TransactionClient;
+    targetShiftId: string;
+    targetCashBoxId: string;
+    transfers: Array<{ orderId: string; orderNumber: string; previousOrderNumber: string }>;
+  }) {
+    if (!params.transfers.length) return 0;
+
+    const orderIds = params.transfers.map((t) => t.orderId);
+    await params.tx.order.updateMany({
+      where: { id: { in: orderIds } },
+      data: {
+        shiftId: params.targetShiftId,
+        cashBoxId: params.targetCashBoxId,
+      },
+    });
+    await params.tx.orderPayment.updateMany({
+      where: { orderId: { in: orderIds } },
+      data: { shiftId: params.targetShiftId },
+    });
+
+    for (const transfer of params.transfers) {
+      if (transfer.orderNumber === transfer.previousOrderNumber) continue;
       await params.tx.order.update({
-        where: { id: order.id },
-        data: {
-          shiftId: params.targetShiftId,
-          cashBoxId: params.targetCashBoxId,
-          orderNumber,
-        },
-      });
-      await params.tx.orderPayment.updateMany({
-        where: { orderId: order.id },
-        data: { shiftId: params.targetShiftId },
+        where: { id: transfer.orderId },
+        data: { orderNumber: transfer.orderNumber },
       });
     }
 
-    return orders.length;
+    return params.transfers.length;
   }
 
   async currentShiftForCashBox(branchId: string, cashBoxId: string, userId?: string) {
