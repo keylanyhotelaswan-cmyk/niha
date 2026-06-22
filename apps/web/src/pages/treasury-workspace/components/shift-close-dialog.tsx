@@ -25,10 +25,12 @@ import { useAuth } from '../../../lib/auth-context.js';
 import { formatShiftMoney, formatShiftOpenedAt, type ShiftSummaryLike } from '../../../lib/shift-summary-utils.js';
 import { ShiftCollectionBreakdown } from './shift-collection-breakdown.js';
 
+export type ShiftHandoffMode = 'defer' | 'treasury' | 'existing' | 'successor';
+
 export type ShiftClosePayload = {
   countedCash: number;
   note?: string;
-  handoffMode?: 'successor' | 'existing';
+  handoffMode: ShiftHandoffMode;
   targetShiftId?: string;
   successorCashBoxId?: string;
   successorOpeningFloat?: number;
@@ -58,7 +60,11 @@ type HandoffOptionsData = {
     openedAt: string;
   }>;
   cashBoxes: Array<{ id: string; name: string; code: string }>;
+  hasOpenShiftOnCashBox?: boolean;
+  canOpenSuccessor?: boolean;
 };
+
+const STEPS = ['ملخص التحصيل', 'عد العهدة', 'تسليم العهدة', 'تأكيد'] as const;
 
 export function ShiftCloseDialog({
   open,
@@ -77,7 +83,7 @@ export function ShiftCloseDialog({
   const [submitting, setSubmitting] = useState(false);
   const [handoffOptions, setHandoffOptions] = useState<HandoffOptionsData | null>(null);
   const [handoffLoading, setHandoffLoading] = useState(false);
-  const [handoffMode, setHandoffMode] = useState<'successor' | 'existing'>('successor');
+  const [handoffMode, setHandoffMode] = useState<ShiftHandoffMode>('defer');
   const [targetShiftId, setTargetShiftId] = useState('');
   const [successorCashBoxId, setSuccessorCashBoxId] = useState('');
 
@@ -91,20 +97,18 @@ export function ShiftCloseDialog({
     openCount: 0,
     total: Number(summary?.uncollectedCount ?? 0) + Number(summary?.suspendedCount ?? 0),
   };
-  const needsHandoff = pending.total > 0;
-  const steps = needsHandoff
-    ? ['ملخص التحصيل', 'عد العهدة', 'تسليم الطلبات', 'تأكيد']
-    : ['ملخص التحصيل', 'عد العهدة', 'تأكيد'];
-
-  const confirmStep = steps.length - 1;
-  const handoffStep = needsHandoff ? 2 : -1;
+  const hasPendingOrders = pending.total > 0;
+  const confirmStep = STEPS.length - 1;
+  const handoffStep = 2;
   const countStep = 1;
+
+  const canOpenSuccessor = handoffOptions?.canOpenSuccessor !== false && !handoffOptions?.hasOpenShiftOnCashBox;
 
   const reset = () => {
     setStep(0);
     setCountedCash(String(expected));
     setSubmitting(false);
-    setHandoffMode('successor');
+    setHandoffMode('defer');
     setTargetShiftId('');
     setSuccessorCashBoxId('');
   };
@@ -113,6 +117,7 @@ export function ShiftCloseDialog({
     if (open) {
       setCountedCash(String(expected));
       setStep(0);
+      setHandoffMode('defer');
     }
   }, [open, expected]);
 
@@ -127,6 +132,9 @@ export function ShiftCloseDialog({
         if (res.ok && res.data) {
           setHandoffOptions(res.data);
           setSuccessorCashBoxId(res.data.shift.cashBoxId);
+          if (res.data.hasOpenShiftOnCashBox && handoffMode === 'successor') {
+            setHandoffMode('defer');
+          }
         } else {
           setHandoffOptions(null);
         }
@@ -135,13 +143,19 @@ export function ShiftCloseDialog({
   }, [open, shiftId, accessToken]);
 
   const selectedTargetLabel = useMemo(() => {
+    if (handoffMode === 'defer') {
+      return `تسليم ${formatShiftMoney(actual)} للكاشير التالي على ${handoffOptions?.shift.cashBoxName ?? 'نفس الخزنة'}`;
+    }
+    if (handoffMode === 'treasury') {
+      return `تسليم ${formatShiftMoney(actual)} للإدارة (الخزنة الرئيسية)`;
+    }
     if (handoffMode === 'successor') {
       const box = handoffOptions?.cashBoxes.find((c) => c.id === successorCashBoxId);
       return `وردية جديدة على ${box?.name ?? 'نفس الخزنة'} · عهدة ${formatShiftMoney(actual)}`;
     }
     const target = handoffOptions?.openShifts.find((s) => s.id === targetShiftId);
     return target
-      ? `وردية ${target.shiftNumber} · ${target.cashierName} · ${target.cashBoxName}`
+      ? `نقل الطلبات إلى وردية ${target.shiftNumber} · ${target.cashierName}`
       : '—';
   }, [handoffMode, handoffOptions, successorCashBoxId, targetShiftId, actual]);
 
@@ -150,26 +164,28 @@ export function ShiftCloseDialog({
     onClose();
   };
 
-  const canAdvanceFromHandoff = handoffMode === 'successor'
+  const canAdvanceFromHandoff = handoffMode === 'defer'
+    || handoffMode === 'treasury'
+    || handoffMode === 'successor'
     || (handoffMode === 'existing' && Boolean(targetShiftId));
 
   const handleConfirm = async () => {
     if (submitting) return;
-    if (needsHandoff && handoffMode === 'existing' && !targetShiftId) return;
+    if (handoffMode === 'existing' && !targetShiftId) return;
 
     setSubmitting(true);
     try {
-      const payload: ShiftClosePayload = { countedCash: actual };
-      if (needsHandoff) {
-        payload.handoffMode = handoffMode;
-        if (handoffMode === 'existing' && targetShiftId) {
-          payload.targetShiftId = targetShiftId;
-        }
-        if (handoffMode === 'successor') {
-          const boxId = successorCashBoxId || handoffOptions?.shift.cashBoxId;
-          if (boxId) payload.successorCashBoxId = boxId;
-          payload.successorOpeningFloat = actual;
-        }
+      const payload: ShiftClosePayload = {
+        countedCash: actual,
+        handoffMode,
+      };
+      if (handoffMode === 'existing' && targetShiftId) {
+        payload.targetShiftId = targetShiftId;
+      }
+      if (handoffMode === 'successor') {
+        const boxId = successorCashBoxId || handoffOptions?.shift.cashBoxId;
+        if (boxId) payload.successorCashBoxId = boxId;
+        payload.successorOpeningFloat = actual;
       }
       await onConfirm(payload);
       handleClose();
@@ -182,10 +198,10 @@ export function ShiftCloseDialog({
 
   return (
     <Dialog open={open} onClose={handleClose} fullWidth maxWidth="sm">
-      <DialogTitle>{needsHandoff ? `تسليم وإغلاق وردية ${shiftNumber ?? ''}` : `إغلاق وردية ${shiftNumber ?? ''}`}</DialogTitle>
+      <DialogTitle>{`تسليم وإغلاق وردية ${shiftNumber ?? ''}`}</DialogTitle>
       <DialogContent>
         <Stepper activeStep={step} sx={{ mb: 2 }}>
-          {steps.map((label) => (
+          {STEPS.map((label) => (
             <Step key={label}><StepLabel>{label}</StepLabel></Step>
           ))}
         </Stepper>
@@ -200,12 +216,12 @@ export function ShiftCloseDialog({
             <Typography>إجمالي مبيعات: {formatShiftMoney(Number(summary?.totalSales ?? summary?.salesTotal ?? 0))}</Typography>
             <Typography>مصروفات الوردية: {formatShiftMoney(Number(summary?.expensesTotal ?? summary?.outgoing ?? 0))}</Typography>
             <Typography>معلق اعتماد: {formatShiftMoney(Number(summary?.pending ?? summary?.pendingCashInCustody ?? 0))}</Typography>
-            {needsHandoff ? (
-              <Alert severity="warning">
+            {hasPendingOrders ? (
+              <Alert severity="info">
                 {pending.uncollectedCount} طلب لم يُحصّل
                 {pending.suspendedCount ? ` · ${pending.suspendedCount} معلّق` : ''}
                 {pending.openCount ? ` · ${pending.openCount} مفتوح` : ''}
-                {' '}— سيتم نقلها للوردية المستلمة ولن تضيع بعد الإغلاق.
+                {' '}— ستبقى على الخزنة كتذكير للكاشير التالي (بدون فتح وردية جديدة).
               </Alert>
             ) : null}
             <ShiftCollectionBreakdown summary={summary} compact />
@@ -226,7 +242,7 @@ export function ShiftCloseDialog({
               type="number"
               value={countedCash}
               onChange={(e) => setCountedCash(e.target.value)}
-              helperText={needsHandoff ? 'ستُسجَّل كرصيد افتتاح للوردية الجديدة عند التسليم' : undefined}
+              helperText="المبلغ الذي تسلّمه للكاشير التالي أو للإدارة"
             />
             <Alert severity={variance === 0 ? 'success' : 'warning'}>
               {variance === 0
@@ -244,25 +260,39 @@ export function ShiftCloseDialog({
               </Box>
             ) : (
               <>
-                <Alert severity="info">
-                  {pending.total} عنصر سيُنقل للوردية المستلمة ({formatShiftMoney(Number(summary?.uncollectedTotal ?? 0))} غير محصّل).
-                </Alert>
+                {handoffOptions?.hasOpenShiftOnCashBox ? (
+                  <Alert severity="warning">
+                    توجد وردية مفتوحة على هذه الخزنة — لن تُفتح وردية جديدة. سلّم العهدة للكاشير التالي أو للإدارة.
+                  </Alert>
+                ) : null}
                 <FormControl>
                   <RadioGroup
                     value={handoffMode}
-                    onChange={(e) => setHandoffMode(e.target.value as 'successor' | 'existing')}
+                    onChange={(e) => setHandoffMode(e.target.value as ShiftHandoffMode)}
                   >
                     <FormControlLabel
-                      value="successor"
+                      value="defer"
                       control={<Radio />}
-                      label="وردية جديدة — أسلّم العهدة والطلبات (نفس الخزنة أو خزنة أخرى)"
+                      label={`تسليم للكاشير التالي — ${formatShiftMoney(actual)} تُستلم عند فتح الوردية القادمة`}
+                    />
+                    <FormControlLabel
+                      value="treasury"
+                      control={<Radio />}
+                      label="تسليم للإدارة — إيداع العهدة في الخزنة الرئيسية"
                     />
                     <FormControlLabel
                       value="existing"
                       control={<Radio />}
                       disabled={!handoffOptions?.openShifts.length}
-                      label={`وردية مفتوحة أخرى${handoffOptions?.openShifts.length ? '' : ' (لا توجد حالياً)'}`}
+                      label={`نقل الطلبات لوردية مفتوحة${handoffOptions?.openShifts.length ? '' : ' (لا توجد حالياً)'}`}
                     />
+                    {canOpenSuccessor ? (
+                      <FormControlLabel
+                        value="successor"
+                        control={<Radio />}
+                        label="فتح وردية جديدة — تسليم العهدة مباشرة (لا توجد وردية مفتوحة على الخزنة)"
+                      />
+                    ) : null}
                   </RadioGroup>
                 </FormControl>
 
@@ -278,11 +308,13 @@ export function ShiftCloseDialog({
                       <MenuItem key={box.id} value={box.id}>{box.name}</MenuItem>
                     ))}
                   </TextField>
-                ) : (
+                ) : null}
+
+                {handoffMode === 'existing' ? (
                   <TextField
                     select
                     fullWidth
-                    label="وردية المستلم"
+                    label="وردية المستلم (لنقل الطلبات فقط)"
                     value={targetShiftId}
                     onChange={(e) => setTargetShiftId(e.target.value)}
                   >
@@ -293,7 +325,7 @@ export function ShiftCloseDialog({
                       </MenuItem>
                     ))}
                   </TextField>
-                )}
+                ) : null}
               </>
             )}
           </Stack>
@@ -304,15 +336,20 @@ export function ShiftCloseDialog({
             <Typography>عهدة متوقعة: {formatShiftMoney(expected)}</Typography>
             <Typography>عهدة فعلية: {formatShiftMoney(actual)}</Typography>
             <Typography fontWeight={800}>فرق: {formatShiftMoney(variance)}</Typography>
-            {needsHandoff ? (
-              <Typography variant="body2" color="primary.main" fontWeight={700}>
-                التسليم إلى: {selectedTargetLabel}
-              </Typography>
-            ) : null}
+            <Typography variant="body2" color="primary.main" fontWeight={700}>
+              {selectedTargetLabel}
+            </Typography>
             <Typography variant="body2" color="text.secondary">
-              {needsHandoff
-                ? 'بعد التأكيد: تُغلق ورديتك، تُنقل الطلبات غير المحصّلة، وتُفتح وردية جديدة بالعهدة إن اخترت ذلك.'
-                : 'بعد التأكيد ستُغلق الوردية ولا يمكن إضافة حركات عليها.'}
+              {handoffMode === 'defer'
+                ? 'بعد التأكيد: تُغلق ورديتك. عند فتح الكاشير التالي وردية على نفس الخزنة ستظهر رسالة باسمك ومبلغ العهدة.'
+                : handoffMode === 'treasury'
+                  ? 'بعد التأكيد: تُغلق الوردية ويُسجَّل إيداع العهدة للإدارة.'
+                  : handoffMode === 'existing'
+                    ? 'بعد التأكيد: تُغلق ورديتك وتُنقل الطلبات غير المكتملة للوردية المختارة.'
+                    : 'بعد التأكيد: تُغلق ورديتك وتُفتح وردية جديدة بالعهدة.'}
+              {hasPendingOrders && handoffMode !== 'existing'
+                ? ' الطلبات غير المحصّلة تبقى على الخزنة كتذكير.'
+                : ''}
             </Typography>
             {onOpenSummaryPreview ? (
               <Button size="small" variant="outlined" onClick={onOpenSummaryPreview} sx={{ alignSelf: 'flex-start', mt: 1 }}>
@@ -335,7 +372,7 @@ export function ShiftCloseDialog({
           </Button>
         ) : (
           <Button variant="contained" disabled={submitting} onClick={handleConfirm}>
-            {needsHandoff ? 'تأكيد التسليم والإغلاق' : 'تأكيد الإغلاق'}
+            تأكيد التسليم والإغلاق
           </Button>
         )}
       </DialogActions>

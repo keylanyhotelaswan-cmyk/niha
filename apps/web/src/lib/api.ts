@@ -25,7 +25,7 @@ export async function apiCloseShift(dto: {
   shiftId: string;
   countedCash: number;
   note?: string;
-  handoffMode?: 'successor' | 'existing';
+  handoffMode?: 'defer' | 'treasury' | 'existing' | 'successor';
   targetShiftId?: string;
   successorCashBoxId?: string;
   successorOpeningFloat?: number;
@@ -46,7 +46,21 @@ export async function apiShiftHandoffOptions(shiftId: string, token?: string) {
       openedAt: string;
     }>;
     cashBoxes: Array<{ id: string; name: string; code: string }>;
+    hasOpenShiftOnCashBox?: boolean;
+    canOpenSuccessor?: boolean;
   }>(`/shifts/handoff-options?shiftId=${shiftId}`, token);
+}
+
+export async function apiPendingCashHandoff(cashBoxId: string, token?: string) {
+  return apiGet<{
+    id: string;
+    fromShiftNumber: string;
+    handedByName: string | null;
+    cashAmount: number;
+    uncollectedCount: number;
+    note: string | null;
+    createdAt: string;
+  } | null>(`/shifts/pending-handoff?cashBoxId=${cashBoxId}`, token);
 }
 
 export async function apiCurrentShift(branchId: string, cashBoxId: string, token?: string) {

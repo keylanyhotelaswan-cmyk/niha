@@ -29,7 +29,7 @@ import { OrderAuditDialog } from './components/order-audit-dialog.js';
 import { OrderSummaryDialog } from './components/order-summary-dialog.js';
 import { OrderEditDialog, type OrderAmendPayload } from './components/order-edit-dialog.js';
 import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
-import { apiAmendOrder, apiCancelClosedOrder, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
+import { apiAmendOrder, apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
 import { parseApiErrorBody } from '../../lib/api-client.js';
 import { patchShiftOrderRemoved, patchShiftOrderUncollected } from '../../lib/hooks.js';
 import { ShiftCloseDialog } from '../treasury-workspace/components/shift-close-dialog.js';
@@ -76,6 +76,12 @@ export function PosPage() {
   const [shiftOpenDialog, setShiftOpenDialog] = useState(false);
   const [shiftCloseDialog, setShiftCloseDialog] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('0');
+  const [pendingCashHandoff, setPendingCashHandoff] = useState<{
+    handedByName: string | null;
+    cashAmount: number;
+    fromShiftNumber: string;
+    uncollectedCount: number;
+  } | null>(null);
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectOrder, setCollectOrder] = useState<SavedOrder | null>(null);
   const [collectPayment, setCollectPayment] = useState('cash');
@@ -105,6 +111,26 @@ export function PosPage() {
       void isPrintBridgeOnline();
     }
   }, [workspace.shiftOpen, canUsePrint]);
+
+  useEffect(() => {
+    if (!shiftOpenDialog || !workspace.accessToken || !workspace.resolvedCashBoxId) {
+      setPendingCashHandoff(null);
+      return;
+    }
+    void apiPendingCashHandoff(workspace.resolvedCashBoxId, workspace.accessToken).then((res) => {
+      if (res.ok && res.data) {
+        setPendingCashHandoff({
+          handedByName: res.data.handedByName,
+          cashAmount: res.data.cashAmount,
+          fromShiftNumber: res.data.fromShiftNumber,
+          uncollectedCount: res.data.uncollectedCount,
+        });
+        setOpeningFloat(String(res.data.cashAmount));
+      } else {
+        setPendingCashHandoff(null);
+      }
+    });
+  }, [shiftOpenDialog, workspace.accessToken, workspace.resolvedCashBoxId]);
 
   const cartQtyMap = useMemo(() => {
     const m = new Map<string, number>();
@@ -662,8 +688,18 @@ export function PosPage() {
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             <Typography variant="body2" color="text.secondary">
-              افتح الوردية قبل البيع. الطلبات المعلّقة تبقى محفوظة.
+              افتح الوردية قبل البيع. الطلبات غير المحصّلة على الخزنة تبقى كتذكير.
             </Typography>
+            {pendingCashHandoff ? (
+              <Alert severity="info">
+                {pendingCashHandoff.handedByName ?? 'الكاشير السابق'} سلّمك{' '}
+                {Number(pendingCashHandoff.cashAmount).toLocaleString('en-US')} ج.م نقدية
+                {' '}(من وردية {pendingCashHandoff.fromShiftNumber})
+                {pendingCashHandoff.uncollectedCount
+                  ? ` · ${pendingCashHandoff.uncollectedCount} طلب غير محصّل على الخزنة`
+                  : ''}
+              </Alert>
+            ) : null}
             <TextField label="عهدة الفتح (نقدي)" type="number" value={openingFloat} onChange={(e) => setOpeningFloat(e.target.value)} />
           </Stack>
         </DialogContent>
@@ -674,8 +710,14 @@ export function PosPage() {
             if (res.ok) {
               setShiftOpenDialog(false);
               setOpeningFloat('0');
-              notify((res.data as any)?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
-            } else notify((res as any).body ?? (res as any).error ?? 'فشل فتح الوردية');
+              setPendingCashHandoff(null);
+              const handoffMsg = (res as { handoffMessage?: string }).handoffMessage;
+              if (handoffMsg) {
+                notify(handoffMsg);
+              } else {
+                notify((res.data as { created?: boolean })?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
+              }
+            } else notify((res as { body?: string; error?: string }).body ?? (res as { error?: string }).error ?? 'فشل فتح الوردية');
           }}>فتح</Button>
         </DialogActions>
       </Dialog>

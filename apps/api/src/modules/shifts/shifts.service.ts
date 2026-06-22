@@ -33,7 +33,13 @@ export class ShiftsService {
 
     const shift = await this.openShift({ ...openDto, openingFloat: openDto.openingFloat ?? 0 }, userId);
     const summary = await this.treasuryService.getShiftSummary(shift.id);
-    return { shiftOpen: true, shift, summary, created: true };
+    return {
+      shiftOpen: true,
+      shift,
+      summary,
+      created: true,
+      ...(shift.acceptedHandoff ? { acceptedHandoff: shift.acceptedHandoff } : {}),
+    };
   }
 
   async getPosContext(organizationId: string, userId?: string) {
@@ -233,6 +239,9 @@ export class ShiftsService {
       }
 
       return shift;
+    }).then(async (shift) => {
+      const acceptedHandoff = await this.acceptPendingCashHandoff(openDto.cashBoxId, shift.id);
+      return { ...shift, acceptedHandoff };
     });
   }
 
@@ -255,6 +264,10 @@ export class ShiftsService {
       where: { branchId: shift.branchId },
       orderBy: { code: 'asc' },
     });
+    const openOnSameCashBox = await this.prisma.shift.findFirst({
+      where: { cashBoxId: shift.cashBoxId, status: 'OPEN', id: { not: shiftId } },
+      select: { id: true, shiftNumber: true },
+    });
 
     return {
       shift: {
@@ -274,6 +287,53 @@ export class ShiftsService {
         openedAt: s.openedAt.toISOString(),
       })),
       cashBoxes: cashBoxes.map((c) => ({ id: c.id, name: c.name, code: c.code })),
+      hasOpenShiftOnCashBox: Boolean(openOnSameCashBox),
+      canOpenSuccessor: !openOnSameCashBox,
+    };
+  }
+
+  async getPendingCashHandoff(cashBoxId: string) {
+    const row = await this.prisma.shiftCashHandoff.findFirst({
+      where: { cashBoxId, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!row) return null;
+    return {
+      id: row.id,
+      fromShiftNumber: row.fromShiftNumber,
+      handedByName: row.handedByName,
+      cashAmount: Number(row.cashAmount),
+      uncollectedCount: row.uncollectedCount,
+      note: row.note,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  private async resolveUserDisplayName(userId: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { fullName: true, username: true },
+    });
+    return user?.fullName?.trim() || user?.username?.trim() || null;
+  }
+
+  private async acceptPendingCashHandoff(cashBoxId: string, acceptedShiftId: string) {
+    const pending = await this.prisma.shiftCashHandoff.findFirst({
+      where: { cashBoxId, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!pending) return null;
+    await this.prisma.shiftCashHandoff.update({
+      where: { id: pending.id },
+      data: { status: 'ACCEPTED', acceptedShiftId, acceptedAt: new Date() },
+    });
+    return {
+      id: pending.id,
+      fromShiftNumber: pending.fromShiftNumber,
+      handedByName: pending.handedByName,
+      cashAmount: Number(pending.cashAmount),
+      uncollectedCount: pending.uncollectedCount,
+      note: pending.note,
     };
   }
 
@@ -284,7 +344,7 @@ export class ShiftsService {
 
     const shiftRecord = await this.prisma.shift.findUnique({
       where: { id: closeDto.shiftId },
-      include: { cashBox: true },
+      include: { cashBox: true, openedBy: true },
     });
     if (!shiftRecord) {
       throw new NotFoundException('الوردية غير موجودة');
@@ -303,26 +363,22 @@ export class ShiftsService {
       throw new NotFoundException('الفرع غير موجود');
     }
 
+    const handoffMode = closeDto.handoffMode ?? 'defer';
     const pending = await this.countTransferableOrders(closeDto.shiftId);
-    const needsHandoff = pending.total > 0;
-
-    if (needsHandoff && !closeDto.handoffMode) {
-      throw new BadRequestException(
-        `يوجد ${pending.uncollectedCount} طلب لم يُحصّل${pending.suspendedCount ? ` و${pending.suspendedCount} معلّق` : ''}. اختر «تسليم وردية» لنقلها قبل الإغلاق.`,
-      );
-    }
+    const handoffNote = closeDto.note?.trim() ?? null;
+    const handedByName = await this.resolveUserDisplayName(userId);
 
     let targetShiftId: string | null = null;
     let targetCashBoxId: string | null = null;
     let targetShiftNumber: string | null = null;
 
-    if (closeDto.handoffMode === 'existing') {
+    if (handoffMode === 'existing') {
       if (!closeDto.targetShiftId) {
         throw new BadRequestException('حدد وردية المستلم');
       }
       const target = await this.prisma.shift.findUnique({
         where: { id: closeDto.targetShiftId },
-        include: { cashBox: true },
+        include: { cashBox: true, openedBy: true },
       });
       if (!target || target.status !== 'OPEN') {
         throw new BadRequestException('وردية المستلم غير متاحة');
@@ -336,25 +392,22 @@ export class ShiftsService {
       targetShiftId = target.id;
       targetCashBoxId = target.cashBoxId;
       targetShiftNumber = target.shiftNumber;
-    } else if (closeDto.handoffMode === 'successor') {
+    } else if (handoffMode === 'successor') {
       targetCashBoxId = closeDto.successorCashBoxId ?? shiftRecord.cashBoxId;
       const conflict = await this.prisma.shift.findFirst({
         where: { cashBoxId: targetCashBoxId, status: 'OPEN', id: { not: closeDto.shiftId } },
       });
       if (conflict) {
-        throw new BadRequestException('توجد وردية مفتوحة على الخزنة المختارة — اختر وردية مفتوحة أخرى أو خزنة مختلفة');
+        throw new BadRequestException('توجد وردية مفتوحة على الخزنة — استخدم «تسليم للكاشير التالي» أو اختر وردية مفتوحة أخرى');
       }
     }
 
     const closedAt = new Date();
     const summary = await this.treasuryService.getShiftSummary(closeDto.shiftId);
-    const handoffNote = closeDto.note?.trim() ?? null;
-    const transferPlan = closeDto.handoffMode && pending.total > 0
+    const transferPlan = handoffMode === 'existing' && pending.total > 0 && targetShiftId
       ? await this.planOrderHandoff({
           sourceShiftId: closeDto.shiftId,
-          ...(closeDto.handoffMode === 'existing' && closeDto.targetShiftId
-            ? { targetShiftId: closeDto.targetShiftId }
-            : {}),
+          targetShiftId,
           organizationId: branch.organizationId,
           branchId: shiftRecord.branchId,
         })
@@ -366,6 +419,9 @@ export class ShiftsService {
         data: { status: 'CLOSED', closedAt },
         include: { cashBox: true, openedBy: true },
       });
+
+      const closingNoteParts: string[] = [];
+      if (handoffNote) closingNoteParts.push(handoffNote);
 
       const closing = await tx.shiftClosing.create({
         data: {
@@ -380,8 +436,51 @@ export class ShiftsService {
 
       let successor: typeof shift | null = null;
       let transferredCount = 0;
+      let cashHandoffId: string | null = null;
 
-      if (closeDto.handoffMode === 'successor') {
+      if (handoffMode === 'defer') {
+        await tx.shiftCashHandoff.updateMany({
+          where: { cashBoxId: shiftRecord.cashBoxId, status: 'PENDING' },
+          data: { status: 'CANCELLED' },
+        });
+        const handoff = await tx.shiftCashHandoff.create({
+          data: {
+            branchId: shiftRecord.branchId,
+            cashBoxId: shiftRecord.cashBoxId,
+            fromShiftId: closeDto.shiftId,
+            fromShiftNumber: shiftRecord.shiftNumber,
+            handedById: userId,
+            handedByName,
+            cashAmount: closeDto.countedCash,
+            uncollectedCount: pending.uncollectedCount,
+            note: handoffNote,
+          },
+        });
+        cashHandoffId = handoff.id;
+        closingNoteParts.push(`تسليم ${closeDto.countedCash} ج.م للكاشير التالي`);
+      } else if (handoffMode === 'treasury') {
+        if (closeDto.countedCash > 0) {
+          await tx.treasuryTransaction.create({
+            data: {
+              branchId: shiftRecord.branchId,
+              cashBoxId: shiftRecord.cashBoxId,
+              shiftId: closeDto.shiftId,
+              safeType: 'EXPENSES',
+              transactionType: 'CASH_DEPOSIT',
+              paymentMethod: 'CASH',
+              amount: closeDto.countedCash,
+              sourceType: 'SHIFT',
+              sourceId: closeDto.shiftId,
+              note: `تسليم عهدة وردية ${shiftRecord.shiftNumber} للإدارة`,
+              approvalStatus: 'APPROVED',
+              collectionStatus: 'APPROVED',
+              affectsCash: true,
+              occurredAt: closedAt,
+            },
+          });
+        }
+        closingNoteParts.push('تسليم العهدة للإدارة');
+      } else if (handoffMode === 'successor') {
         const openingFloat = closeDto.successorOpeningFloat ?? closeDto.countedCash;
         const shiftNumber = await this.sequenceService.getNextNumber(
           branch.organizationId,
@@ -422,12 +521,19 @@ export class ShiftsService {
         }
       }
 
-      if (closeDto.handoffMode && targetShiftId && targetCashBoxId && pending.total > 0) {
+      if (handoffMode === 'existing' && targetShiftId && targetCashBoxId && transferPlan?.length) {
         transferredCount = await this.transferPendingOrders({
           tx,
           targetShiftId,
           targetCashBoxId,
-          transfers: transferPlan ?? [],
+          transfers: transferPlan,
+        });
+      }
+
+      if (closingNoteParts.length) {
+        await tx.shiftClosing.update({
+          where: { id: closing.id },
+          data: { note: closingNoteParts.join(' · ') },
         });
       }
 
@@ -436,14 +542,14 @@ export class ShiftsService {
           where: { id: closing.id },
           data: {
             note: [
-              handoffNote,
-              `تسليم ${transferredCount} طلب/سلة إلى وردية ${targetShiftNumber}`,
+              closingNoteParts.join(' · '),
+              `نقل ${transferredCount} طلب/سلة إلى وردية ${targetShiftNumber}`,
             ].filter(Boolean).join(' · '),
           },
         });
       }
 
-      return { shift, closing, successor, transferredCount };
+      return { shift, closing, successor, transferredCount, cashHandoffId };
     }, { maxWait: 15_000, timeout: 120_000 });
 
     return {
@@ -451,14 +557,15 @@ export class ShiftsService {
       closing: txResult.closing,
       summary,
       successorShift: txResult.successor,
-      handoff: closeDto.handoffMode
-        ? {
-            mode: closeDto.handoffMode,
-            targetShiftId,
-            targetShiftNumber,
-            transferredCount: txResult.transferredCount,
-          }
-        : null,
+      cashHandoffId: txResult.cashHandoffId,
+      handoff: {
+        mode: handoffMode,
+        targetShiftId,
+        targetShiftNumber,
+        transferredCount: txResult.transferredCount,
+        cashAmount: handoffMode === 'defer' ? closeDto.countedCash : null,
+        handedByName: handoffMode === 'defer' ? handedByName : null,
+      },
     };
   }
 

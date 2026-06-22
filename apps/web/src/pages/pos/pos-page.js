@@ -10,7 +10,7 @@ import { OrderAuditDialog } from './components/order-audit-dialog.js';
 import { OrderSummaryDialog } from './components/order-summary-dialog.js';
 import { OrderEditDialog } from './components/order-edit-dialog.js';
 import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
-import { apiAmendOrder, apiCancelClosedOrder, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
+import { apiAmendOrder, apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
 import { parseApiErrorBody } from '../../lib/api-client.js';
 import { patchShiftOrderRemoved, patchShiftOrderUncollected } from '../../lib/hooks.js';
 import { ShiftCloseDialog } from '../treasury-workspace/components/shift-close-dialog.js';
@@ -53,6 +53,7 @@ export function PosPage() {
     const [shiftOpenDialog, setShiftOpenDialog] = useState(false);
     const [shiftCloseDialog, setShiftCloseDialog] = useState(false);
     const [openingFloat, setOpeningFloat] = useState('0');
+    const [pendingCashHandoff, setPendingCashHandoff] = useState(null);
     const [collectOpen, setCollectOpen] = useState(false);
     const [collectOrder, setCollectOrder] = useState(null);
     const [collectPayment, setCollectPayment] = useState('cash');
@@ -80,6 +81,26 @@ export function PosPage() {
             void isPrintBridgeOnline();
         }
     }, [workspace.shiftOpen, canUsePrint]);
+    useEffect(() => {
+        if (!shiftOpenDialog || !workspace.accessToken || !workspace.resolvedCashBoxId) {
+            setPendingCashHandoff(null);
+            return;
+        }
+        void apiPendingCashHandoff(workspace.resolvedCashBoxId, workspace.accessToken).then((res) => {
+            if (res.ok && res.data) {
+                setPendingCashHandoff({
+                    handedByName: res.data.handedByName,
+                    cashAmount: res.data.cashAmount,
+                    fromShiftNumber: res.data.fromShiftNumber,
+                    uncollectedCount: res.data.uncollectedCount,
+                });
+                setOpeningFloat(String(res.data.cashAmount));
+            }
+            else {
+                setPendingCashHandoff(null);
+            }
+        });
+    }, [shiftOpenDialog, workspace.accessToken, workspace.resolvedCashBoxId]);
     const cartQtyMap = useMemo(() => {
         const m = new Map();
         order.cartItems.forEach((i) => m.set(i.productId, i.quantity));
@@ -336,12 +357,21 @@ export function PosPage() {
                                     }
                                     else
                                         notify(res.body ?? res.error ?? 'فشل تسجيل المصروف');
-                                }, children: "\u062D\u0641\u0638" })] })] }), _jsxs(Dialog, { open: shiftOpenDialog, onClose: () => setShiftOpenDialog(false), fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "\u0627\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0642\u0628\u0644 \u0627\u0644\u0628\u064A\u0639. \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u0627\u0644\u0645\u0639\u0644\u0651\u0642\u0629 \u062A\u0628\u0642\u0649 \u0645\u062D\u0641\u0648\u0638\u0629." }), _jsx(TextField, { label: "\u0639\u0647\u062F\u0629 \u0627\u0644\u0641\u062A\u062D (\u0646\u0642\u062F\u064A)", type: "number", value: openingFloat, onChange: (e) => setOpeningFloat(e.target.value) })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setShiftOpenDialog(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", onClick: async () => {
+                                }, children: "\u062D\u0641\u0638" })] })] }), _jsxs(Dialog, { open: shiftOpenDialog, onClose: () => setShiftOpenDialog(false), fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "\u0627\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0642\u0628\u0644 \u0627\u0644\u0628\u064A\u0639. \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u063A\u064A\u0631 \u0627\u0644\u0645\u062D\u0635\u0651\u0644\u0629 \u0639\u0644\u0649 \u0627\u0644\u062E\u0632\u0646\u0629 \u062A\u0628\u0642\u0649 \u0643\u062A\u0630\u0643\u064A\u0631." }), pendingCashHandoff ? (_jsxs(Alert, { severity: "info", children: [pendingCashHandoff.handedByName ?? 'الكاشير السابق', " \u0633\u0644\u0651\u0645\u0643", ' ', Number(pendingCashHandoff.cashAmount).toLocaleString('en-US'), " \u062C.\u0645 \u0646\u0642\u062F\u064A\u0629", ' ', "(\u0645\u0646 \u0648\u0631\u062F\u064A\u0629 ", pendingCashHandoff.fromShiftNumber, ")", pendingCashHandoff.uncollectedCount
+                                            ? ` · ${pendingCashHandoff.uncollectedCount} طلب غير محصّل على الخزنة`
+                                            : ''] })) : null, _jsx(TextField, { label: "\u0639\u0647\u062F\u0629 \u0627\u0644\u0641\u062A\u062D (\u0646\u0642\u062F\u064A)", type: "number", value: openingFloat, onChange: (e) => setOpeningFloat(e.target.value) })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setShiftOpenDialog(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", onClick: async () => {
                                     const res = await workspace.openShift(Number(openingFloat) || 0);
                                     if (res.ok) {
                                         setShiftOpenDialog(false);
                                         setOpeningFloat('0');
-                                        notify(res.data?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
+                                        setPendingCashHandoff(null);
+                                        const handoffMsg = res.handoffMessage;
+                                        if (handoffMsg) {
+                                            notify(handoffMsg);
+                                        }
+                                        else {
+                                            notify(res.data?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
+                                        }
                                     }
                                     else
                                         notify(res.body ?? res.error ?? 'فشل فتح الوردية');

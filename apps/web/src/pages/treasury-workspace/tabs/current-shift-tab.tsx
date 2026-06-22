@@ -13,10 +13,10 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { MetricCard, SectionCard } from '../../shared.js';
 import { useAuth } from '../../../lib/auth-context.js';
-import { apiCreateMovement, apiGetOrder, apiOpenShift } from '../../../lib/api.js';
+import { apiCreateMovement, apiGetOrder, apiOpenShift, apiPendingCashHandoff } from '../../../lib/api.js';
 import {
   isIncomingTransaction,
   mapMovementTypeToApi,
@@ -66,6 +66,12 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
   const [movementAmount, setMovementAmount] = useState('0');
   const [movementNote, setMovementNote] = useState('');
   const [closeOpen, setCloseOpen] = useState(false);
+  const [pendingCashHandoff, setPendingCashHandoff] = useState<{
+    handedByName: string | null;
+    cashAmount: number;
+    fromShiftNumber: string;
+    uncollectedCount: number;
+  } | null>(null);
   const [orderDialog, setOrderDialog] = useState<SavedOrder | null>(null);
   const [orderLoadingId, setOrderLoadingId] = useState<string | null>(null);
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
@@ -84,6 +90,26 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
     if (!summary) return;
     setSummaryPreviewOpen(true);
   };
+
+  useEffect(() => {
+    if (shiftOpen || !accessToken || !cashBoxId) {
+      setPendingCashHandoff(null);
+      return;
+    }
+    void apiPendingCashHandoff(cashBoxId, accessToken).then((res) => {
+      if (res.ok && res.data) {
+        setPendingCashHandoff({
+          handedByName: res.data.handedByName,
+          cashAmount: res.data.cashAmount,
+          fromShiftNumber: res.data.fromShiftNumber,
+          uncollectedCount: res.data.uncollectedCount,
+        });
+        setOpeningFloat(String(res.data.cashAmount));
+      } else {
+        setPendingCashHandoff(null);
+      }
+    });
+  }, [shiftOpen, accessToken, cashBoxId]);
 
   const treasuryStats = [
     { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: '#0f766e' },
@@ -120,7 +146,21 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
       openingFloat: Number(openingFloat) || 0,
     }, accessToken);
     if (res.ok) {
-      onMessage('تم فتح الوردية.');
+      const data = res.data as {
+        acceptedHandoff?: {
+          handedByName?: string | null;
+          cashAmount?: number;
+          fromShiftNumber?: string;
+          uncollectedCount?: number;
+        };
+      };
+      const handoff = data?.acceptedHandoff;
+      if (handoff?.handedByName && handoff.cashAmount != null) {
+        onMessage(`${handoff.handedByName} سلّمك ${Number(handoff.cashAmount).toLocaleString('en-US')} ج.م نقدية (من وردية ${handoff.fromShiftNumber ?? '—'})`);
+      } else {
+        onMessage('تم فتح الوردية.');
+      }
+      setPendingCashHandoff(null);
       onRefresh();
     } else {
       onMessage(`فشل فتح الوردية: ${res.body ?? res.error}`);
@@ -152,7 +192,7 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
 
   const handleCloseShift = async (payload: {
     countedCash: number;
-    handoffMode?: 'successor' | 'existing';
+    handoffMode: 'defer' | 'treasury' | 'existing' | 'successor';
     targetShiftId?: string;
     successorCashBoxId?: string;
     successorOpeningFloat?: number;
@@ -163,14 +203,18 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
         shiftId: shift.id,
         countedCash: payload.countedCash,
         note: 'إغلاق وردية من مساحة الخزنة',
-        ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+        handoffMode: payload.handoffMode,
         ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
         ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
         ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
       });
-      const handoff = (result as any)?.handoff;
-      if (handoff?.transferredCount > 0) {
-        onMessage(`تم التسليم: ${handoff.transferredCount} طلب → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`);
+      const handoff = (result as { handoff?: { mode?: string; transferredCount?: number; targetShiftNumber?: string; cashAmount?: number } })?.handoff;
+      if (handoff?.mode === 'defer') {
+        onMessage(`تم التسليم: ${Number(handoff.cashAmount ?? payload.countedCash).toLocaleString('en-US')} ج.م للكاشير التالي.`);
+      } else if (handoff?.mode === 'treasury') {
+        onMessage('تم إغلاق الوردية وتسليم العهدة للإدارة.');
+      } else if (handoff?.transferredCount && handoff.transferredCount > 0) {
+        onMessage(`تم نقل ${handoff.transferredCount} طلب → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`);
       } else {
         onMessage('تم إغلاق الوردية.');
       }
@@ -230,13 +274,25 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
             <SectionCard title="إدارة الوردية">
               <Stack spacing={1.5}>
                 {!shiftOpen ? (
-                  <TextField
-                    label="رصيد الافتتاح"
-                    size="small"
-                    type="number"
-                    value={openingFloat}
-                    onChange={(e) => setOpeningFloat(e.target.value)}
-                  />
+                  <>
+                    {pendingCashHandoff ? (
+                      <Alert severity="info">
+                        {pendingCashHandoff.handedByName ?? 'الكاشير السابق'} سلّمك{' '}
+                        {Number(pendingCashHandoff.cashAmount).toLocaleString('en-US')} ج.م
+                        {' '}(وردية {pendingCashHandoff.fromShiftNumber})
+                        {pendingCashHandoff.uncollectedCount
+                          ? ` · ${pendingCashHandoff.uncollectedCount} طلب غير محصّل`
+                          : ''}
+                      </Alert>
+                    ) : null}
+                    <TextField
+                      label="رصيد الافتتاح"
+                      size="small"
+                      type="number"
+                      value={openingFloat}
+                      onChange={(e) => setOpeningFloat(e.target.value)}
+                    />
+                  </>
                 ) : null}
                 <Button variant={shiftOpen ? 'outlined' : 'contained'} onClick={toggleShift}>
                   {shiftOpen ? 'إغلاق الوردية' : 'فتح وردية'}

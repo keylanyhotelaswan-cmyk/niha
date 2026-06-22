@@ -13,22 +13,24 @@ export class CloseShiftDto {
   @IsString()
   note?: string;
 
-  /** نقل الطلبات المعلّقة و/أو فتح وردية خلفية */
+  /**
+   * defer — إغلاق + تسليم النقد للكاشير التالي (بدون فتح وردية) + الطلبات غير المحصلة تبقى على الخزنة
+   * existing — نقل الطلبات لوردية مفتوحة
+   * treasury — تسليم النقد للإدارة + إغلاق
+   * successor — فتح وردية جديدة (فقط إن لم توجد وردية مفتوحة على الخزنة)
+   */
   @IsOptional()
-  @IsIn(['successor', 'existing'])
-  handoffMode?: 'successor' | 'existing';
+  @IsIn(['defer', 'existing', 'treasury', 'successor'])
+  handoffMode?: 'defer' | 'existing' | 'treasury' | 'successor';
 
-  /** وردية مفتوحة مستلمة — مطلوب مع handoffMode=existing */
   @IsOptional()
   @IsString()
   targetShiftId?: string;
 
-  /** خزنة الوردية الجديدة — الافتراضي نفس خزنة الوردية الحالية */
   @IsOptional()
   @IsString()
   successorCashBoxId?: string;
 
-  /** رصيد افتتاح الوردية الجديدة — الافتراضي العهدة المعدّة */
   @IsOptional()
   @Type(() => Number)
   @IsNumber()

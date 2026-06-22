@@ -167,6 +167,17 @@ export function usePosWorkspace() {
             else {
                 await refreshAfterOrder();
             }
+            const handoff = data.acceptedHandoff ?? data.shift?.acceptedHandoff;
+            if (handoff?.handedByName && handoff.cashAmount != null) {
+                const name = handoff.handedByName;
+                const amount = Number(handoff.cashAmount).toLocaleString('en-US');
+                const extra = handoff.uncollectedCount ? ` · ${handoff.uncollectedCount} طلب غير محصّل على الخزنة` : '';
+                return {
+                    ...res,
+                    handoffMessage: `${name} سلّمك ${amount} ج.م نقدية (من وردية ${handoff.fromShiftNumber ?? '—'})${extra}`,
+                    suggestedOpeningFloat: handoff.cashAmount,
+                };
+            }
         }
         return res;
     };
@@ -180,7 +191,7 @@ export function usePosWorkspace() {
             const result = await closeShift.mutateAsync({
                 shiftId: shift.id,
                 countedCash: payload.countedCash,
-                ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+                handoffMode: payload.handoffMode,
                 ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
                 ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
                 ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
@@ -190,8 +201,14 @@ export function usePosWorkspace() {
             const handoff = result?.handoff;
             const successor = result?.successorShift;
             let message = 'تم إغلاق الوردية.';
-            if (handoff?.transferredCount > 0) {
-                message = `تم التسليم: ${handoff.transferredCount} طلب/سلة → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`;
+            if (handoff?.mode === 'defer') {
+                message = `تم التسليم: ${Number(handoff.cashAmount ?? payload.countedCash).toLocaleString('en-US')} ج.م للكاشير التالي على نفس الخزنة.`;
+            }
+            else if (handoff?.mode === 'treasury') {
+                message = 'تم إغلاق الوردية وتسليم العهدة للإدارة.';
+            }
+            else if (handoff?.transferredCount && handoff.transferredCount > 0) {
+                message = `تم نقل ${handoff.transferredCount} طلب/سلة → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`;
             }
             if (successor) {
                 message += ` وردية جديدة ${successor.shiftNumber} مفتوحة.`;

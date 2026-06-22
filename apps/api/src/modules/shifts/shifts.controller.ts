@@ -29,6 +29,15 @@ export class ShiftsController {
     return this.shiftsService.closeShift(dto, req.user?.id);
   }
 
+  @Get('pending-handoff')
+  @RequirePermissions('shifts.access')
+  pendingHandoff(@Query('cashBoxId') cashBoxId: string) {
+    if (!cashBoxId?.trim()) {
+      throw new BadRequestException('cashBoxId مطلوب');
+    }
+    return this.shiftsService.getPendingCashHandoff(cashBoxId.trim());
+  }
+
   @Get('handoff-options')
   @RequirePermissions('shifts.access')
   handoffOptions(@Query('shiftId') shiftId: string) {

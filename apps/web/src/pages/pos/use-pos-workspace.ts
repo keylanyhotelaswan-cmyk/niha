@@ -217,7 +217,17 @@ export function usePosWorkspace() {
     }, accessToken);
 
     if (res.ok && res.data) {
-      const data = res.data as { shift?: Record<string, unknown>; summary?: unknown };
+      const data = res.data as {
+        shift?: Record<string, unknown>;
+        summary?: unknown;
+        created?: boolean;
+        acceptedHandoff?: {
+          handedByName?: string | null;
+          cashAmount?: number;
+          fromShiftNumber?: string;
+          uncollectedCount?: number;
+        };
+      };
       if (data.shift) {
         patchPosCachesAfterAutoOpen(queryClient, openBranchId, openCashBoxId, {
           shift: data.shift,
@@ -227,13 +237,24 @@ export function usePosWorkspace() {
       } else {
         await refreshAfterOrder();
       }
+      const handoff = data.acceptedHandoff ?? (data.shift as { acceptedHandoff?: typeof data.acceptedHandoff })?.acceptedHandoff;
+      if (handoff?.handedByName && handoff.cashAmount != null) {
+        const name = handoff.handedByName;
+        const amount = Number(handoff.cashAmount).toLocaleString('en-US');
+        const extra = handoff.uncollectedCount ? ` · ${handoff.uncollectedCount} طلب غير محصّل على الخزنة` : '';
+        return {
+          ...res,
+          handoffMessage: `${name} سلّمك ${amount} ج.م نقدية (من وردية ${handoff.fromShiftNumber ?? '—'})${extra}`,
+          suggestedOpeningFloat: handoff.cashAmount,
+        };
+      }
     }
     return res;
   };
 
   const closeShiftSession = async (payload: {
     countedCash: number;
-    handoffMode?: 'successor' | 'existing';
+    handoffMode: 'defer' | 'treasury' | 'existing' | 'successor';
     targetShiftId?: string;
     successorCashBoxId?: string;
     successorOpeningFloat?: number;
@@ -246,18 +267,22 @@ export function usePosWorkspace() {
       const result = await closeShift.mutateAsync({
         shiftId: shift.id,
         countedCash: payload.countedCash,
-        ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+        handoffMode: payload.handoffMode,
         ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
         ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
         ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
       });
       invalidatePosQueries(queryClient);
       await refreshAll();
-      const handoff = (result as any)?.handoff;
-      const successor = (result as any)?.successorShift;
+      const handoff = (result as { handoff?: { mode?: string; transferredCount?: number; targetShiftNumber?: string; cashAmount?: number; handedByName?: string } })?.handoff;
+      const successor = (result as { successorShift?: { shiftNumber?: string } })?.successorShift;
       let message = 'تم إغلاق الوردية.';
-      if (handoff?.transferredCount > 0) {
-        message = `تم التسليم: ${handoff.transferredCount} طلب/سلة → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`;
+      if (handoff?.mode === 'defer') {
+        message = `تم التسليم: ${Number(handoff.cashAmount ?? payload.countedCash).toLocaleString('en-US')} ج.م للكاشير التالي على نفس الخزنة.`;
+      } else if (handoff?.mode === 'treasury') {
+        message = 'تم إغلاق الوردية وتسليم العهدة للإدارة.';
+      } else if (handoff?.transferredCount && handoff.transferredCount > 0) {
+        message = `تم نقل ${handoff.transferredCount} طلب/سلة → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`;
       }
       if (successor) {
         message += ` وردية جديدة ${successor.shiftNumber} مفتوحة.`;

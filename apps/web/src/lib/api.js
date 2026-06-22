@@ -25,6 +25,9 @@ export async function apiCloseShift(dto, token) {
 export async function apiShiftHandoffOptions(shiftId, token) {
     return apiGet(`/shifts/handoff-options?shiftId=${shiftId}`, token);
 }
+export async function apiPendingCashHandoff(cashBoxId, token) {
+    return apiGet(`/shifts/pending-handoff?cashBoxId=${cashBoxId}`, token);
+}
 export async function apiCurrentShift(branchId, cashBoxId, token) {
     return apiGet(`/shifts/current?branchId=${branchId}&cashBoxId=${cashBoxId}`, token);
 }

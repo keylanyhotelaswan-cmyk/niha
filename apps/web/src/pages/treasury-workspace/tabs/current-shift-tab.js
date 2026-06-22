@@ -125,14 +125,20 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
                 shiftId: shift.id,
                 countedCash: payload.countedCash,
                 note: 'إغلاق وردية من مساحة الخزنة',
-                ...(payload.handoffMode ? { handoffMode: payload.handoffMode } : {}),
+                handoffMode: payload.handoffMode,
                 ...(payload.targetShiftId ? { targetShiftId: payload.targetShiftId } : {}),
                 ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
                 ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
             });
             const handoff = result?.handoff;
-            if (handoff?.transferredCount > 0) {
-                onMessage(`تم التسليم: ${handoff.transferredCount} طلب → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`);
+            if (handoff?.mode === 'defer') {
+                onMessage(`تم التسليم: ${Number(handoff.cashAmount ?? payload.countedCash).toLocaleString('en-US')} ج.م للكاشير التالي.`);
+            }
+            else if (handoff?.mode === 'treasury') {
+                onMessage('تم إغلاق الوردية وتسليم العهدة للإدارة.');
+            }
+            else if (handoff?.transferredCount && handoff.transferredCount > 0) {
+                onMessage(`تم نقل ${handoff.transferredCount} طلب → وردية ${handoff.targetShiftNumber ?? 'المستلمة'}.`);
             }
             else {
                 onMessage('تم إغلاق الوردية.');

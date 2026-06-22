@@ -390,7 +390,7 @@ export function useShiftMutations() {
       shiftId: string;
       countedCash: number;
       note?: string;
-      handoffMode?: 'successor' | 'existing';
+      handoffMode?: 'defer' | 'treasury' | 'existing' | 'successor';
       targetShiftId?: string;
       successorCashBoxId?: string;
       successorOpeningFloat?: number;
