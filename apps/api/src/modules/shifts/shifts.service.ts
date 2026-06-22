@@ -200,7 +200,7 @@ export class ShiftsService {
     const openingFloat = openDto.openingFloat ?? 0;
     const openedAt = new Date();
 
-    return this.prisma.$transaction(async (tx) => {
+    const txResult = await this.prisma.$transaction(async (tx) => {
       const shift = await tx.shift.create({
         data: {
           branchId: openDto.branchId,
@@ -222,27 +222,21 @@ export class ShiftsService {
       });
 
       if (openingFloat > 0) {
-        await this.treasuryService.recordTransaction({
+        await this.recordShiftOpenFloatTx(tx, {
           branchId: openDto.branchId,
           cashBoxId: openDto.cashBoxId,
           shiftId: shift.id,
-          transactionType: 'SHIFT_OPEN_FLOAT',
-          paymentMethod: 'CASH',
           amount: openingFloat,
-          sourceType: 'SHIFT',
-          sourceId: shift.id,
           note: 'رصيد افتتاح الوردية',
-          approvalStatus: 'APPROVED',
-          collectionStatus: 'APPROVED',
-          affectsCash: true,
+          occurredAt: openedAt,
         });
       }
 
-      return shift;
-    }).then(async (shift) => {
-      const acceptedHandoff = await this.acceptPendingCashHandoff(openDto.cashBoxId, shift.id);
-      return { ...shift, acceptedHandoff };
+      const acceptedHandoff = await this.acceptPendingCashHandoff(openDto.cashBoxId, shift.id, tx);
+      return { shift, acceptedHandoff };
     });
+
+    return { ...txResult.shift, acceptedHandoff: txResult.acceptedHandoff };
   }
 
   async getHandoffOptions(shiftId: string) {
@@ -317,13 +311,17 @@ export class ShiftsService {
     return user?.fullName?.trim() || user?.username?.trim() || null;
   }
 
-  private async acceptPendingCashHandoff(cashBoxId: string, acceptedShiftId: string) {
-    const pending = await this.prisma.shiftCashHandoff.findFirst({
+  private async acceptPendingCashHandoff(
+    cashBoxId: string,
+    acceptedShiftId: string,
+    tx: Prisma.TransactionClient = this.prisma,
+  ) {
+    const pending = await tx.shiftCashHandoff.findFirst({
       where: { cashBoxId, status: 'PENDING' },
       orderBy: { createdAt: 'desc' },
     });
     if (!pending) return null;
-    await this.prisma.shiftCashHandoff.update({
+    await tx.shiftCashHandoff.update({
       where: { id: pending.id },
       data: { status: 'ACCEPTED', acceptedShiftId, acceptedAt: new Date() },
     });
