@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiAutoOpenShift, apiCollectClosedOrder, apiCreateCashierExpense, apiListExpenseStockItems, apiShiftWalletTransfer } from '../../lib/api.js';
 import { apiGet } from '../../lib/api-client.js';
 import { useAuth } from '../../lib/auth-context.js';
-import { invalidatePosQueries, patchPosCachesAfterAutoOpen, patchShiftOrderCollected, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosContext, usePosShiftSummary, useShiftCollectedOrders, useShiftUncollectedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
+import { invalidatePosQueries, patchPosCachesAfterAutoOpen, patchShiftOrderCollected, patchShiftOrderUncollected, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosContext, usePosShiftSummary, useShiftCollectedOrders, useShiftUncollectedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
 import { readPosContextCache } from '../../lib/pos-cache.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
 import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
@@ -238,25 +238,31 @@ export function usePosWorkspace() {
             return { ok: false, error: message };
         }
     };
-    const collectOrder = async (order, paymentMethodId) => {
+    const collectOrder = (order, paymentMethodId, onError) => {
         if (!accessToken)
             return { ok: false, error: 'غير مسجل' };
-        const shiftId = order.id && effectiveShiftId ? effectiveShiftId : shift?.id;
+        const shiftId = effectiveShiftId ?? shift?.id;
         if (shiftId) {
             patchShiftOrderCollected(queryClient, shiftId, order.id);
         }
-        const res = await apiCollectClosedOrder(order.id, {
-            paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
-            amount: order.total,
-        }, accessToken);
-        if (res.ok) {
-            void refetchPosOrderData(queryClient, shiftId ?? effectiveShiftId);
-        }
-        else if (shiftId) {
-            void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
-            void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
-        }
-        return res;
+        void (async () => {
+            const res = await apiCollectClosedOrder(order.id, {
+                paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
+                amount: order.total,
+            }, accessToken);
+            if (res.ok) {
+                void refetchPosOrderData(queryClient, shiftId);
+                return;
+            }
+            const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
+            if (shiftId) {
+                patchShiftOrderUncollected(queryClient, shiftId, order.id);
+                void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
+                void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
+            }
+            onError?.(message);
+        })();
+        return { ok: true };
     };
     const createExpense = async (dto) => {
         if (!accessToken || !shift?.id)

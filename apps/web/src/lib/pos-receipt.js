@@ -122,14 +122,25 @@ export async function printPosReceipt(data, options) {
     const needKitchen = copies === 'kitchen' || copies === 'both';
     const needCustomer = copies === 'customer' || copies === 'both';
     if (silent && settings.printMode === 'escpos') {
-        const { buildEscPosJobs, pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
+        const { renderCustomerReceiptPng, renderKitchenReceiptPng, } = await import('./pos-receipt-render.js');
         const { bridgePrintEscPos } = await import('./pos-print-bridge.js');
-        const escposResult = await bridgePrintEscPos(buildEscPosJobs(data, copies), pickEscPosBridgeSettings());
+        const { pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
+        const kitchen = kitchenFromReceipt(data);
+        const [kPng, cPng] = await Promise.all([
+            needKitchen ? renderKitchenReceiptPng(kitchen, settings) : Promise.resolve(null),
+            needCustomer ? renderCustomerReceiptPng(data, settings) : Promise.resolve(null),
+        ]);
+        const imageJobs = [];
+        if (kPng)
+            imageJobs.push({ pngBase64: kPng.base64 });
+        if (cPng)
+            imageJobs.push({ pngBase64: cPng.base64 });
+        const escposResult = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
         if (escposResult.ok) {
             return { ok: true, method: 'escpos', printer: escposResult.printer, copies };
         }
         if (escposResult.reason !== 'bridge-offline') {
-            console.warn('[pos-print] ESC/POS failed, falling back to PNG:', escposResult.message);
+            console.warn('[pos-print] ESC/POS image failed, falling back to PNG/PDF:', escposResult.message);
         }
         else {
             return { ok: false, message: escposResult.message, reason: escposResult.reason };
@@ -138,11 +149,10 @@ export async function printPosReceipt(data, options) {
     const payloads = [];
     const { buildCustomerReceiptHtml, buildKitchenReceiptHtml, renderCustomerReceiptPng, renderKitchenReceiptPng, } = await import('./pos-receipt-render.js');
     const kitchen = kitchenFromReceipt(data);
-    const [kPng, cPng] = needKitchen && needCustomer
-        ? [await renderKitchenReceiptPng(kitchen), await renderCustomerReceiptPng(data)]
-        : needKitchen
-            ? [await renderKitchenReceiptPng(kitchen), null]
-            : [null, await renderCustomerReceiptPng(data)];
+    const [kPng, cPng] = await Promise.all([
+        needKitchen ? renderKitchenReceiptPng(kitchen) : Promise.resolve(null),
+        needCustomer ? renderCustomerReceiptPng(data) : Promise.resolve(null),
+    ]);
     if (needKitchen) {
         payloads.push({
             html: buildKitchenReceiptHtml(kitchen),

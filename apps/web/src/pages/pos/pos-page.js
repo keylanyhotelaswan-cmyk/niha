@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, Fab, MenuItem, Paper, Snackbar, Stack, TextField, Typography, useMediaQuery, useTheme, } from '@mui/material';
+import { Alert, Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Fab, MenuItem, Paper, Snackbar, Stack, TextField, Typography, useMediaQuery, useTheme, } from '@mui/material';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
@@ -77,7 +77,6 @@ export function PosPage() {
     const [collectOpen, setCollectOpen] = useState(false);
     const [collectOrder, setCollectOrder] = useState(null);
     const [collectPayment, setCollectPayment] = useState('cash');
-    const [collectBusy, setCollectBusy] = useState(false);
     const [collectError, setCollectError] = useState('');
     const [pendingOrderId, setPendingOrderId] = useState(null);
     const collectInFlight = useRef(false);
@@ -260,32 +259,33 @@ export function PosPage() {
             void workspace.refreshAfterOrder(workspace.effectiveShiftId);
         })();
     };
-    const runCollect = async (withPrint) => {
+    useEffect(() => {
+        if (collectOpen)
+            preloadPosPrintPipeline();
+    }, [collectOpen]);
+    const runCollect = (withPrint) => {
         if (!collectOrder || collectInFlight.current)
             return;
         collectInFlight.current = true;
-        setCollectBusy(true);
-        setCollectError('');
         const order = collectOrder;
         const payment = collectPayment;
-        setPendingOrderId(order.id);
-        try {
-            const res = await workspace.collectOrder(order, payment);
-            if (!res.ok) {
-                setCollectError(parseApiErrorBody(res.body, res.error ?? 'فشل التحصيل'));
-                notify(parseApiErrorBody(res.body, res.error ?? 'فشل التحصيل'));
-                return;
-            }
-            setCollectOpen(false);
-            setCollectOrder(null);
-            notify(`تم تحصيل ${order.code} في الدرج`);
-            if (withPrint && canUsePrint) {
-                const token = workspace.accessToken;
-                const detail = token && (!order.items.length || order.itemsCount > order.items.length)
-                    ? await fetchOrderDetailForPos(order.id, token)
-                    : order;
-                const orderForPrint = detail ?? order;
-                const brand = getStoreBranding();
+        const shiftId = workspace.effectiveShiftId;
+        setCollectOpen(false);
+        setCollectOrder(null);
+        setCollectError('');
+        const res = workspace.collectOrder(order, payment, (message) => {
+            notify(parseApiErrorBody(message, message));
+            void workspace.refreshAfterOrder(shiftId);
+        });
+        if (!res.ok) {
+            notify(res.error ?? 'فشل التحصيل');
+            collectInFlight.current = false;
+            return;
+        }
+        notify(`تم تحصيل ${order.code} في الدرج`);
+        if (withPrint && canUsePrint) {
+            const brand = getStoreBranding();
+            const printFromOrder = (orderForPrint) => {
                 const receipt = buildReceiptFromSavedOrder(orderForPrint, {
                     storeName: brand.storeName,
                     storeSubtitle: brand.storeSubtitle,
@@ -299,13 +299,18 @@ export function PosPage() {
                 enqueuePosPrint(receipt, { force: true, silent: true, copies: 'customer' }, (printRes) => {
                     handlePrintResult(printRes);
                 });
+            };
+            const needsDetail = !order.items.length || order.itemsCount > order.items.length;
+            if (needsDetail && workspace.accessToken) {
+                void fetchOrderDetailForPos(order.id, workspace.accessToken).then((detail) => {
+                    printFromOrder(detail ?? order);
+                });
+            }
+            else {
+                printFromOrder(order);
             }
         }
-        finally {
-            collectInFlight.current = false;
-            setCollectBusy(false);
-            setPendingOrderId(null);
-        }
+        collectInFlight.current = false;
     };
     const shiftKnown = !workspace.shiftStatusPending;
     const shiftLikelyOpen = workspace.shiftOpen || (workspace.shiftStatusPending && workspace.cachedShiftOpen);
@@ -386,7 +391,7 @@ export function PosPage() {
                 })(), onClose: () => setSummaryOrder(null) }), _jsx(ProductionPlanDialog, { open: productionPlanOpen, branchId: workspace.effectiveBranchId, accessToken: workspace.accessToken, onClose: () => setProductionPlanOpen(false), onSaved: () => {
                     notify('تم حفظ خطة الإنتاج.');
                     void catalog.reload();
-                } }), _jsxs(Dialog, { open: collectOpen, onClose: collectBusy ? undefined : () => { setCollectOpen(false); setCollectError(''); }, fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u062A\u062D\u0635\u064A\u0644 \u0641\u064A \u0627\u0644\u062F\u0631\u062C" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [collectError ? _jsx(Alert, { severity: "error", children: collectError }) : null, _jsx(TextField, { label: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628", value: collectOrder?.code ?? '', InputProps: { readOnly: true } }), _jsx(TextField, { label: "\u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A", value: collectOrder ? formatCurrency(collectOrder.total) : '', InputProps: { readOnly: true } }), _jsx(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: collectPayment, onChange: (e) => setCollectPayment(e.target.value), disabled: collectBusy, children: catalog.paymentMethods.map((m) => _jsx(MenuItem, { value: m.id, children: m.label }, m.id)) })] }) }), _jsxs(DialogActions, { sx: { flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }, children: [_jsx(Button, { onClick: () => { setCollectOpen(false); setCollectError(''); }, disabled: collectBusy, children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "outlined", disabled: collectBusy, ...(collectBusy ? { startIcon: _jsx(CircularProgress, { size: 16 }) } : {}), onClick: () => void runCollect(false), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل فقط' }), canUsePrint ? (_jsx(Button, { variant: "contained", disabled: collectBusy, ...(collectBusy ? { startIcon: _jsx(CircularProgress, { size: 16, color: "inherit" }) } : {}), onClick: () => void runCollect(true), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل وطباعة' })) : null] })] }), canUsePrint ? (_jsx(PrintSetupDialog, { open: printSetupOpen, onClose: () => setPrintSetupOpen(false) })) : null, _jsxs(Dialog, { open: expenseOpen, onClose: () => setExpenseOpen(false), fullWidth: true, maxWidth: "sm", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u0645\u0635\u0631\u0648\u0641 \u0645\u0646 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Alert, { severity: "info", sx: { borderRadius: 2 }, children: "\u064A\u064F\u062E\u0635\u0645 \u0645\u0646 \u062D\u0633\u0627\u0628 \u0627\u0644\u062F\u0641\u0639 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 (\u0646\u0642\u062F\u064A \u0645\u0646 \u0627\u0644\u062F\u0631\u062C\u060C \u0623\u0648 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A/\u0645\u062D\u0641\u0638\u0629 \u0645\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0648\u0631\u062F\u064A\u0629)." }), _jsxs(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: expensePaymentMethod, onChange: (e) => setExpensePaymentMethod(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(TextField, { select: true, label: "\u0646\u0648\u0639 \u0627\u0644\u0645\u0635\u0631\u0648\u0641", value: expenseKind, onChange: (e) => setExpenseKind(e.target.value), children: [_jsx(MenuItem, { value: "GENERAL", children: "\u0645\u0635\u0631\u0648\u0641 \u0639\u0627\u0645" }), _jsx(MenuItem, { value: "ITEM", children: "\u0634\u0631\u0627\u0621 \u062E\u0627\u0645\u0627\u062A" })] }), expenseKind === 'ITEM' ? (_jsxs(_Fragment, { children: [_jsx(TextField, { select: true, label: "\u0627\u0644\u0635\u0646\u0641", value: expenseStockItemId, onChange: (e) => {
+                } }), _jsxs(Dialog, { open: collectOpen, onClose: () => { setCollectOpen(false); setCollectError(''); }, fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u062A\u062D\u0635\u064A\u0644 \u0641\u064A \u0627\u0644\u062F\u0631\u062C" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [collectError ? _jsx(Alert, { severity: "error", children: collectError }) : null, _jsx(TextField, { label: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628", value: collectOrder?.code ?? '', InputProps: { readOnly: true } }), _jsx(TextField, { label: "\u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A", value: collectOrder ? formatCurrency(collectOrder.total) : '', InputProps: { readOnly: true } }), _jsx(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: collectPayment, onChange: (e) => setCollectPayment(e.target.value), children: catalog.paymentMethods.map((m) => _jsx(MenuItem, { value: m.id, children: m.label }, m.id)) })] }) }), _jsxs(DialogActions, { sx: { flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }, children: [_jsx(Button, { onClick: () => { setCollectOpen(false); setCollectError(''); }, children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "outlined", onClick: () => runCollect(false), children: "\u062A\u062D\u0635\u064A\u0644 \u0641\u0642\u0637" }), canUsePrint ? (_jsx(Button, { variant: "contained", onClick: () => runCollect(true), children: "\u062A\u062D\u0635\u064A\u0644 \u0648\u0637\u0628\u0627\u0639\u0629" })) : null] })] }), canUsePrint ? (_jsx(PrintSetupDialog, { open: printSetupOpen, onClose: () => setPrintSetupOpen(false) })) : null, _jsxs(Dialog, { open: expenseOpen, onClose: () => setExpenseOpen(false), fullWidth: true, maxWidth: "sm", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u0645\u0635\u0631\u0648\u0641 \u0645\u0646 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Alert, { severity: "info", sx: { borderRadius: 2 }, children: "\u064A\u064F\u062E\u0635\u0645 \u0645\u0646 \u062D\u0633\u0627\u0628 \u0627\u0644\u062F\u0641\u0639 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 (\u0646\u0642\u062F\u064A \u0645\u0646 \u0627\u0644\u062F\u0631\u062C\u060C \u0623\u0648 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A/\u0645\u062D\u0641\u0638\u0629 \u0645\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0648\u0631\u062F\u064A\u0629)." }), _jsxs(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: expensePaymentMethod, onChange: (e) => setExpensePaymentMethod(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(TextField, { select: true, label: "\u0646\u0648\u0639 \u0627\u0644\u0645\u0635\u0631\u0648\u0641", value: expenseKind, onChange: (e) => setExpenseKind(e.target.value), children: [_jsx(MenuItem, { value: "GENERAL", children: "\u0645\u0635\u0631\u0648\u0641 \u0639\u0627\u0645" }), _jsx(MenuItem, { value: "ITEM", children: "\u0634\u0631\u0627\u0621 \u062E\u0627\u0645\u0627\u062A" })] }), expenseKind === 'ITEM' ? (_jsxs(_Fragment, { children: [_jsx(TextField, { select: true, label: "\u0627\u0644\u0635\u0646\u0641", value: expenseStockItemId, onChange: (e) => {
                                                 const id = e.target.value;
                                                 setExpenseStockItemId(id);
                                                 const item = stockItems.find((s) => s.id === id);

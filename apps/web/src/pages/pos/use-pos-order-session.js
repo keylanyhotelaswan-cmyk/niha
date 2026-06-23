@@ -266,7 +266,6 @@ export function usePosOrderSession(workspace, catalog) {
             : null;
         resetOrder(closedOrderType);
         setModalOpen(false);
-        catalog.onNotify?.(`جاري إغلاق ${orderCodeSnapshot}…`);
         void (async () => {
             const res = await apiPlaceOrder({
                 branchId: effectiveBranchId,
