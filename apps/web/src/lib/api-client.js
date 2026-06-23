@@ -15,6 +15,7 @@ export function parseApiErrorBody(body, fallback = 'طلب غير ناجح') {
     return body;
 }
 export const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:4000/api';
+export const AUTH_EXPIRED_EVENT = 'niha:auth-expired';
 function clearAuthStorage() {
     try {
         if (typeof window !== 'undefined') {
@@ -42,6 +43,9 @@ export async function apiFetch(path, options = {}, token) {
         const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
         if (res.status === 401) {
             clearAuthStorage();
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+            }
             return { ok: false, status: 401, body: await res.text(), unauthorized: true };
         }
         if (!res.ok) {

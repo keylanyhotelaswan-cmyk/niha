@@ -57,7 +57,7 @@ export function OrderModal(props) {
     }, [props.products]);
     const getPlanMeta = (productId, fallbackName) => productMetaMap.get(productId) ?? { name: fallbackName };
     const cartPlanAlerts = useMemo(() => summarizeCartPlanAlerts(props.cartItems, (id) => productMetaMap.get(id)?.dailyPlan, isEdit, editBaselineQty), [props.cartItems, productMetaMap, isEdit, editBaselineQty]);
-    const handleSaveEdit = async () => {
+    const handleSaveEdit = () => {
         const check = props.validateTakeawayCustomer?.();
         if (check && !check.ok) {
             setShowFieldErrors(true);
@@ -67,9 +67,10 @@ export function OrderModal(props) {
         setShowFieldErrors(false);
         setValidationError('');
         setConfirmOpen(false);
-        const res = await props.onSaveEdit?.();
-        if (res && !res.ok && res.error)
-            setValidationError(res.error);
+        void Promise.resolve(props.onSaveEdit?.()).then((res) => {
+            if (res && !res.ok && res.error)
+                setValidationError(res.error);
+        });
     };
     const handleCloseOrder = () => {
         const check = props.validateTakeawayCustomer?.();

@@ -15,9 +15,16 @@ let preloadStarted = false;
 export function preloadPosPrintPipeline(): void {
   if (preloadStarted) return;
   preloadStarted = true;
+  void import('./pos-receipt.js');
   void import('./pos-receipt-render.js');
   void import('./pos-print-bridge.js');
   void import('./pos-receipt-escpos.js');
+}
+
+function yieldToUi(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 }
 
 export function enqueuePosPrint(
@@ -34,6 +41,7 @@ async function drainQueue(): Promise<void> {
   processing = true;
   try {
     while (queue.length > 0) {
+      await yieldToUi();
       const job = queue.shift()!;
       const { printPosReceipt } = await import('./pos-receipt.js');
       const printRes = await printPosReceipt(job.data, job.options);

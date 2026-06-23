@@ -375,7 +375,7 @@ export async function renderHtmlToPng(
   const heightPad = 48;
   iframe.style.height = `${contentHeight + heightPad}px`;
 
-  const captureScale = 2;
+  const captureScale = 1;
   try {
     const rawCanvas = await capture(target, {
       backgroundColor: '#ffffff',

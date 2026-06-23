@@ -22,6 +22,8 @@ export type ApiResult<T = unknown> = {
   unauthorized?: boolean;
 };
 
+export const AUTH_EXPIRED_EVENT = 'niha:auth-expired';
+
 function clearAuthStorage() {
   try {
     if (typeof window !== 'undefined') {
@@ -55,6 +57,9 @@ export async function apiFetch<T = unknown>(
 
     if (res.status === 401) {
       clearAuthStorage();
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(AUTH_EXPIRED_EVENT));
+      }
       return { ok: false, status: 401, body: await res.text(), unauthorized: true };
     }
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiCreateOpenOrder, apiPlaceOrder, apiAmendOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
-import { invalidatePosQueries, patchShiftOrderAdded, refetchPosOrderData } from '../../lib/hooks.js';
+import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, refetchPosOrderData } from '../../lib/hooks.js';
 import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
 import { isAutoPrintEnabled, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
 import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, } from '../../lib/pos-store.js';
@@ -266,6 +266,13 @@ export function usePosOrderSession(workspace, catalog) {
             : null;
         resetOrder(closedOrderType);
         setModalOpen(false);
+        if (printPayload) {
+            void enqueuePosPrint({ ...printPayload, orderNumber: orderCodeSnapshot }, { force: true, silent: true, copies: 'both' }, (printRes) => {
+                if (!printRes.ok && !printRes.skipped) {
+                    catalog.onNotify?.(`تم إغلاق ${orderCodeSnapshot} — فشل الطباعة: ${printRes.message}`);
+                }
+            });
+        }
         void (async () => {
             const res = await apiPlaceOrder({
                 branchId: effectiveBranchId,
@@ -297,13 +304,6 @@ export function usePosOrderSession(workspace, catalog) {
                 patchShiftOrderAdded(queryClient, shiftIdForRefresh, apiOrder);
             }
             void refetchPosOrderData(queryClient, shiftIdForRefresh);
-            if (printPayload) {
-                void enqueuePosPrint({ ...printPayload, orderNumber: orderCode }, { force: true, silent: true, copies: 'both' }, (printRes) => {
-                    if (!printRes.ok && !printRes.skipped) {
-                        catalog.onNotify?.(`تم إغلاق ${orderCode} — فشل الطباعة: ${printRes.message}`);
-                    }
-                });
-            }
         })();
         return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
     };
@@ -338,7 +338,9 @@ export function usePosOrderSession(workspace, catalog) {
         const takeawayCheck = validateTakeawayCustomer();
         if (!takeawayCheck.ok)
             return takeawayCheck;
-        const res = await apiAmendOrder(editingOrderId, {
+        const orderId = editingOrderId;
+        const shiftIdForRefresh = shift?.id;
+        const amendDto = {
             customerName: orderOwnerName.trim() || defaultOwnerName(orderType),
             customerPhone: customerPhone.trim(),
             customerAddress: customerAddress.trim(),
@@ -354,17 +356,40 @@ export function usePosOrderSession(workspace, catalog) {
                     ...(note ? { note } : {}),
                 };
             }),
-        }, accessToken);
-        if (res.ok) {
-            setEditMode(false);
-            setEditingOrderId(null);
-            setModalOpen(false);
-            resetOrder();
-            void refreshAfterOrder();
+        };
+        const localPatch = {
+            totalAmount: total,
+            discountAmount: amendDto.discountAmount,
+            customerName: amendDto.customerName,
+            customerPhone: amendDto.customerPhone,
+            customerAddress: amendDto.customerAddress,
+            captainName: amendDto.captainName,
+            note: amendDto.note,
+            _count: { items: cartItems.length },
+        };
+        if (shiftIdForRefresh) {
+            patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, localPatch);
         }
-        return res.ok
-            ? { ok: true }
-            : { ok: false, error: res.body ?? res.error ?? 'فشل حفظ التعديل' };
+        setEditMode(false);
+        setEditingOrderId(null);
+        setModalOpen(false);
+        resetOrder();
+        void (async () => {
+            const res = await apiAmendOrder(orderId, amendDto, accessToken);
+            if (res.ok) {
+                if (shiftIdForRefresh && res.data) {
+                    patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, res.data);
+                }
+                void refetchPosOrderData(queryClient, shiftIdForRefresh);
+            }
+            else {
+                catalog.onNotify?.(res.body
+                    ?? res.error
+                    ?? 'فشل حفظ التعديل');
+                void refetchPosOrderData(queryClient, shiftIdForRefresh);
+            }
+        })();
+        return { ok: true };
     };
     const resumeSuspended = async (order) => {
         if (!accessToken || !ensureShift())

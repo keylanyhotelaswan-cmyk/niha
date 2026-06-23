@@ -57,13 +57,29 @@ export function patchPosCachesAfterAutoOpen(
   });
 }
 
-/** تحديث خفيف بعد إغلاق طلب / تحصيل — ملخص فقط */
+/** تحديث خفيف بعد إغلاق طلب / تحصيل — ملخص + قوائم الطلبات */
 export function refetchPosOrderData(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId?: string,
 ) {
   if (!shiftId) return;
   void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftId) });
+  void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftUncollected(shiftId) });
+  void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftCollected(shiftId) });
+}
+
+/** تحديث فوري لبيانات طلب في كاش القوائم (بعد تعديل فاتورة مثلاً) */
+export function patchShiftOrderUpdated(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  orderId: string,
+  patch: Record<string, unknown>,
+) {
+  const merge = (orders: any[]) =>
+    orders.map((order) => (order.id === orderId ? { ...order, ...patch } : order));
+
+  patchUncollectedList(queryClient, shiftId, merge);
+  patchCollectedPages(queryClient, shiftId, merge);
 }
 
 function patchUncollectedList(

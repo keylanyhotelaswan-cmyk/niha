@@ -1,6 +1,6 @@
 import { jsx as _jsx } from "react/jsx-runtime";
 import { createContext, useContext, useState, useEffect } from 'react';
-import { API_BASE } from './api-client.js';
+import { API_BASE, AUTH_EXPIRED_EVENT } from './api-client.js';
 const AuthContext = createContext(undefined);
 export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
@@ -8,6 +8,21 @@ export function AuthProvider({ children }) {
     const [permissions, setPermissions] = useState([]);
     const [accessToken, setAccessToken] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
+    const logout = () => {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('user');
+        localStorage.removeItem('roles');
+        localStorage.removeItem('permissions');
+        setAccessToken(null);
+        setUser(null);
+        setRoles([]);
+        setPermissions([]);
+    };
+    useEffect(() => {
+        const onAuthExpired = () => logout();
+        window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+        return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+    }, []);
     useEffect(() => {
         const storedToken = localStorage.getItem('accessToken');
         const storedUser = localStorage.getItem('user');
@@ -31,13 +46,16 @@ export function AuthProvider({ children }) {
                         localStorage.setItem('roles', JSON.stringify(body.roles ?? []));
                         localStorage.setItem('permissions', JSON.stringify(body.permissions ?? []));
                     }
+                    else if (res.status === 401) {
+                        logout();
+                    }
                     else {
                         setUser(JSON.parse(storedUser));
                         setRoles(storedRoles ? JSON.parse(storedRoles) : []);
                         setPermissions(storedPermissions ? JSON.parse(storedPermissions) : []);
                     }
                 }
-                catch (e) {
+                catch {
                     setUser(JSON.parse(storedUser));
                     setRoles(storedRoles ? JSON.parse(storedRoles) : []);
                     setPermissions(storedPermissions ? JSON.parse(storedPermissions) : []);
@@ -66,16 +84,6 @@ export function AuthProvider({ children }) {
         setUser(data.user);
         setRoles(data.roles);
         setPermissions(data.permissions);
-    };
-    const logout = () => {
-        localStorage.removeItem('accessToken');
-        localStorage.removeItem('user');
-        localStorage.removeItem('roles');
-        localStorage.removeItem('permissions');
-        setAccessToken(null);
-        setUser(null);
-        setRoles([]);
-        setPermissions([]);
     };
     return (_jsx(AuthContext.Provider, { value: {
             user,

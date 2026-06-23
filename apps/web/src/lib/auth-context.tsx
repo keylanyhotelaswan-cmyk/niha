@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { LoginDto, LoginResponse, User, Role, Permission } from '@niha/contracts';
-import { API_BASE } from './api-client.js';
+import { API_BASE, AUTH_EXPIRED_EVENT } from './api-client.js';
 
 interface AuthContextType {
   user: User | null;
@@ -21,6 +21,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [permissions, setPermissions] = useState<Permission[]>([]);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const logout = () => {
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('user');
+    localStorage.removeItem('roles');
+    localStorage.removeItem('permissions');
+    setAccessToken(null);
+    setUser(null);
+    setRoles([]);
+    setPermissions([]);
+  };
+
+  useEffect(() => {
+    const onAuthExpired = () => logout();
+    window.addEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onAuthExpired);
+  }, []);
 
   useEffect(() => {
     const storedToken = localStorage.getItem('accessToken');
@@ -45,12 +62,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('user', JSON.stringify(body.user));
             localStorage.setItem('roles', JSON.stringify(body.roles ?? []));
             localStorage.setItem('permissions', JSON.stringify(body.permissions ?? []));
+          } else if (res.status === 401) {
+            logout();
           } else {
             setUser(JSON.parse(storedUser));
             setRoles(storedRoles ? JSON.parse(storedRoles) : []);
             setPermissions(storedPermissions ? JSON.parse(storedPermissions) : []);
           }
-        } catch (e) {
+        } catch {
           setUser(JSON.parse(storedUser));
           setRoles(storedRoles ? JSON.parse(storedRoles) : []);
           setPermissions(storedPermissions ? JSON.parse(storedPermissions) : []);
@@ -84,17 +103,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
     setRoles(data.roles);
     setPermissions(data.permissions);
-  };
-
-  const logout = () => {
-    localStorage.removeItem('accessToken');
-    localStorage.removeItem('user');
-    localStorage.removeItem('roles');
-    localStorage.removeItem('permissions');
-    setAccessToken(null);
-    setUser(null);
-    setRoles([]);
-    setPermissions([]);
   };
 
   return (

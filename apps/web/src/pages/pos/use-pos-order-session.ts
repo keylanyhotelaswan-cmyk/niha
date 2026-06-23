@@ -7,7 +7,7 @@ import {
   apiResumeOrder,
   apiSuspendOrder,
 } from '../../lib/api.js';
-import { invalidatePosQueries, patchShiftOrderAdded, refetchPosOrderData } from '../../lib/hooks.js';
+import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, refetchPosOrderData } from '../../lib/hooks.js';
 import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
 import {
   isAutoPrintEnabled,
@@ -320,6 +320,18 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     resetOrder(closedOrderType);
     setModalOpen(false);
 
+    if (printPayload) {
+      void enqueuePosPrint(
+        { ...printPayload, orderNumber: orderCodeSnapshot },
+        { force: true, silent: true, copies: 'both' },
+        (printRes) => {
+          if (!printRes.ok && !printRes.skipped) {
+            catalog.onNotify?.(`تم إغلاق ${orderCodeSnapshot} — فشل الطباعة: ${printRes.message}`);
+          }
+        },
+      );
+    }
+
     void (async () => {
       const res = await apiPlaceOrder({
         branchId: effectiveBranchId,
@@ -354,18 +366,6 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
         patchShiftOrderAdded(queryClient, shiftIdForRefresh, apiOrder);
       }
       void refetchPosOrderData(queryClient, shiftIdForRefresh);
-
-      if (printPayload) {
-        void enqueuePosPrint(
-          { ...printPayload, orderNumber: orderCode },
-          { force: true, silent: true, copies: 'both' },
-          (printRes) => {
-            if (!printRes.ok && !printRes.skipped) {
-              catalog.onNotify?.(`تم إغلاق ${orderCode} — فشل الطباعة: ${printRes.message}`);
-            }
-          },
-        );
-      }
     })();
 
     return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
@@ -400,7 +400,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     const takeawayCheck = validateTakeawayCustomer();
     if (!takeawayCheck.ok) return takeawayCheck;
 
-    const res = await apiAmendOrder(editingOrderId, {
+    const orderId = editingOrderId;
+    const shiftIdForRefresh = shift?.id;
+    const amendDto = {
       customerName: orderOwnerName.trim() || defaultOwnerName(orderType),
       customerPhone: customerPhone.trim(),
       customerAddress: customerAddress.trim(),
@@ -416,18 +418,46 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
           ...(note ? { note } : {}),
         };
       }),
-    }, accessToken);
+    };
+    const localPatch = {
+      totalAmount: total,
+      discountAmount: amendDto.discountAmount,
+      customerName: amendDto.customerName,
+      customerPhone: amendDto.customerPhone,
+      customerAddress: amendDto.customerAddress,
+      captainName: amendDto.captainName,
+      note: amendDto.note,
+      _count: { items: cartItems.length },
+    };
 
-    if (res.ok) {
-      setEditMode(false);
-      setEditingOrderId(null);
-      setModalOpen(false);
-      resetOrder();
-      void refreshAfterOrder();
+    if (shiftIdForRefresh) {
+      patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, localPatch);
     }
-    return res.ok
-      ? { ok: true as const }
-      : { ok: false as const, error: (res as { body?: string; error?: string }).body ?? (res as { error?: string }).error ?? 'فشل حفظ التعديل' };
+
+    setEditMode(false);
+    setEditingOrderId(null);
+    setModalOpen(false);
+    resetOrder();
+
+    void (async () => {
+      const res = await apiAmendOrder(orderId, amendDto, accessToken);
+
+      if (res.ok) {
+        if (shiftIdForRefresh && res.data) {
+          patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, res.data as Record<string, unknown>);
+        }
+        void refetchPosOrderData(queryClient, shiftIdForRefresh);
+      } else {
+        catalog.onNotify?.(
+          (res as { body?: string; error?: string }).body
+            ?? (res as { error?: string }).error
+            ?? 'فشل حفظ التعديل',
+        );
+        void refetchPosOrderData(queryClient, shiftIdForRefresh);
+      }
+    })();
+
+    return { ok: true as const };
   };
 
   const resumeSuspended = async (order: SavedOrder) => {

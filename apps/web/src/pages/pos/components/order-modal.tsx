@@ -204,7 +204,7 @@ export function OrderModal(props: OrderModalProps) {
     [props.cartItems, productMetaMap, isEdit, editBaselineQty],
   );
 
-  const handleSaveEdit = async () => {
+  const handleSaveEdit = () => {
     const check = props.validateTakeawayCustomer?.();
     if (check && !check.ok) {
       setShowFieldErrors(true);
@@ -214,8 +214,9 @@ export function OrderModal(props: OrderModalProps) {
     setShowFieldErrors(false);
     setValidationError('');
     setConfirmOpen(false);
-    const res = await props.onSaveEdit?.();
-    if (res && !res.ok && res.error) setValidationError(res.error);
+    void Promise.resolve(props.onSaveEdit?.()).then((res) => {
+      if (res && !res.ok && res.error) setValidationError(res.error);
+    });
   };
   const handleCloseOrder = () => {
     const check = props.validateTakeawayCustomer?.();

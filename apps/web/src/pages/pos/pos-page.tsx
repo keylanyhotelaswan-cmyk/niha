@@ -203,27 +203,34 @@ export function PosPage() {
     if (printRes.reason && canUsePrint) setPrintSetupOpen(true);
   };
 
-  const handleReprint = async (savedOrder: SavedOrder, copies: PrintCopies) => {
+  const handleReprint = (savedOrder: SavedOrder, copies: PrintCopies) => {
     if (!canUsePrint) return;
+    const printFromOrder = (orderForPrint: SavedOrder) => {
+      const brand = getStoreBranding();
+      const receipt = buildReceiptFromSavedOrder(orderForPrint, {
+        storeName: brand.storeName,
+        storeSubtitle: brand.storeSubtitle,
+        storeFooter: brand.storeFooter,
+        storePhone: brand.storePhone,
+        cashierName: workspace.shiftOperatorName,
+        paymentMethodLabel: paymentLabel(savedOrder.paymentMethod),
+        shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
+        isPaid: savedOrder.collectionStatus !== 'uncollected',
+      });
+      enqueuePosPrint(receipt, { force: true, silent: true, copies }, (printRes) => {
+        handlePrintResult(printRes);
+      });
+    };
+
     const token = workspace.accessToken;
-    const detail = token && (!savedOrder.items.length || savedOrder.itemsCount > savedOrder.items.length)
-      ? await fetchOrderDetailForPos(savedOrder.id, token)
-      : savedOrder;
-    const orderForPrint = detail ?? savedOrder;
-    const brand = getStoreBranding();
-    const receipt = buildReceiptFromSavedOrder(orderForPrint, {
-      storeName: brand.storeName,
-      storeSubtitle: brand.storeSubtitle,
-      storeFooter: brand.storeFooter,
-      storePhone: brand.storePhone,
-      cashierName: workspace.shiftOperatorName,
-      paymentMethodLabel: paymentLabel(savedOrder.paymentMethod),
-      shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
-      isPaid: savedOrder.collectionStatus !== 'uncollected',
-    });
-    enqueuePosPrint(receipt, { force: true, silent: true, copies }, (printRes) => {
-      handlePrintResult(printRes);
-    });
+    const needsDetail = token && (!savedOrder.items.length || savedOrder.itemsCount > savedOrder.items.length);
+    if (needsDetail) {
+      void fetchOrderDetailForPos(savedOrder.id, token).then((detail) => {
+        printFromOrder(detail ?? savedOrder);
+      });
+    } else {
+      printFromOrder(savedOrder);
+    }
   };
 
   const handleUncollect = async (order: SavedOrder) => {
@@ -746,7 +753,11 @@ export function PosPage() {
               setExpenseNote('');
               setExpensePaymentMethod('CASH');
               notify('تم تسجيل المصروف.');
-            } else notify((res as any).body ?? (res as any).error ?? 'فشل تسجيل المصروف');
+            } else if ((res as { unauthorized?: boolean }).unauthorized) {
+              notify('انتهت الجلسة. سجّل الدخول مرة أخرى.');
+            } else {
+              notify(parseApiErrorBody((res as { body?: string }).body, (res as { error?: string }).error ?? 'فشل تسجيل المصروف'));
+            }
           }}>حفظ</Button>
         </DialogActions>
       </Dialog>
@@ -814,7 +825,11 @@ export function PosPage() {
                 setTransferFrom('INSTAPAY');
                 setTransferTo('CASH');
                 notify('تم التحويل.');
-              } else notify((res as any).body ?? (res as any).error ?? 'فشل التحويل');
+              } else if ((res as { unauthorized?: boolean }).unauthorized) {
+                notify('انتهت الجلسة. سجّل الدخول مرة أخرى.');
+              } else {
+                notify(parseApiErrorBody((res as { body?: string }).body, (res as { error?: string }).error ?? 'فشل التحويل'));
+              }
             }}
           >
             تحويل

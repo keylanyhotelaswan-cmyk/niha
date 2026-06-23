@@ -172,28 +172,35 @@ export function PosPage() {
         if (printRes.reason && canUsePrint)
             setPrintSetupOpen(true);
     };
-    const handleReprint = async (savedOrder, copies) => {
+    const handleReprint = (savedOrder, copies) => {
         if (!canUsePrint)
             return;
+        const printFromOrder = (orderForPrint) => {
+            const brand = getStoreBranding();
+            const receipt = buildReceiptFromSavedOrder(orderForPrint, {
+                storeName: brand.storeName,
+                storeSubtitle: brand.storeSubtitle,
+                storeFooter: brand.storeFooter,
+                storePhone: brand.storePhone,
+                cashierName: workspace.shiftOperatorName,
+                paymentMethodLabel: paymentLabel(savedOrder.paymentMethod),
+                shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
+                isPaid: savedOrder.collectionStatus !== 'uncollected',
+            });
+            enqueuePosPrint(receipt, { force: true, silent: true, copies }, (printRes) => {
+                handlePrintResult(printRes);
+            });
+        };
         const token = workspace.accessToken;
-        const detail = token && (!savedOrder.items.length || savedOrder.itemsCount > savedOrder.items.length)
-            ? await fetchOrderDetailForPos(savedOrder.id, token)
-            : savedOrder;
-        const orderForPrint = detail ?? savedOrder;
-        const brand = getStoreBranding();
-        const receipt = buildReceiptFromSavedOrder(orderForPrint, {
-            storeName: brand.storeName,
-            storeSubtitle: brand.storeSubtitle,
-            storeFooter: brand.storeFooter,
-            storePhone: brand.storePhone,
-            cashierName: workspace.shiftOperatorName,
-            paymentMethodLabel: paymentLabel(savedOrder.paymentMethod),
-            shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
-            isPaid: savedOrder.collectionStatus !== 'uncollected',
-        });
-        enqueuePosPrint(receipt, { force: true, silent: true, copies }, (printRes) => {
-            handlePrintResult(printRes);
-        });
+        const needsDetail = token && (!savedOrder.items.length || savedOrder.itemsCount > savedOrder.items.length);
+        if (needsDetail) {
+            void fetchOrderDetailForPos(savedOrder.id, token).then((detail) => {
+                printFromOrder(detail ?? savedOrder);
+            });
+        }
+        else {
+            printFromOrder(savedOrder);
+        }
     };
     const handleUncollect = async (order) => {
         const token = workspace.accessToken;
@@ -408,8 +415,12 @@ export function PosPage() {
                                         setExpensePaymentMethod('CASH');
                                         notify('تم تسجيل المصروف.');
                                     }
-                                    else
-                                        notify(res.body ?? res.error ?? 'فشل تسجيل المصروف');
+                                    else if (res.unauthorized) {
+                                        notify('انتهت الجلسة. سجّل الدخول مرة أخرى.');
+                                    }
+                                    else {
+                                        notify(parseApiErrorBody(res.body, res.error ?? 'فشل تسجيل المصروف'));
+                                    }
                                 }, children: "\u062D\u0641\u0638" })] })] }), _jsxs(Dialog, { open: transferOpen, onClose: () => setTransferOpen(false), fullWidth: true, maxWidth: "sm", children: [_jsx(DialogTitle, { children: "\u062A\u062D\u0648\u064A\u0644 \u0628\u064A\u0646 \u062D\u0633\u0627\u0628\u0627\u062A \u0627\u0644\u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Alert, { severity: "info", sx: { borderRadius: 2 }, children: "\u0644\u0648 \u0639\u0645\u064A\u0644 \u062F\u0641\u0639 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A \u0648\u062A\u0633\u0644\u0651\u0645 \u062A\u0645\u0646 \u062F\u0644\u064A\u0641\u0631\u064A \u0643\u0627\u0634 \u2014 \u062D\u0648\u0651\u0644 \u0645\u0646 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A \u0625\u0644\u0649 \u0646\u0642\u062F\u064A. \u0647\u0630\u0627 \u0644\u064A\u0633 \u0645\u0635\u0631\u0648\u0641\u0627\u064B." }), _jsxs(TextField, { select: true, label: "\u0645\u0646", value: transferFrom, onChange: (e) => setTransferFrom(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(TextField, { select: true, label: "\u0625\u0644\u0649", value: transferTo, onChange: (e) => setTransferTo(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(Typography, { variant: "body2", color: "text.secondary", children: ["\u0627\u0644\u0645\u062A\u0627\u062D \u0641\u064A \u00AB\u0645\u0646\u00BB: ", formatShiftMoney(transferAvailable)] }), _jsx(TextField, { label: "\u0627\u0644\u0645\u0628\u0644\u063A", type: "number", value: transferAmount, onChange: (e) => setTransferAmount(e.target.value) }), _jsx(TextField, { label: "\u0627\u0644\u0628\u064A\u0627\u0646 (\u0627\u062E\u062A\u064A\u0627\u0631\u064A)", placeholder: "\u0645\u062B\u0627\u0644: \u062A\u0633\u0644\u064A\u0645 \u062A\u0645\u0646 \u062F\u0644\u064A\u0641\u0631\u064A \u0643\u0627\u0634", value: transferNote, onChange: (e) => setTransferNote(e.target.value) })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setTransferOpen(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", disabled: !workspace.shiftOpen || transferFrom === transferTo, onClick: async () => {
                                     const amount = Number(transferAmount) || 0;
                                     if (amount <= 0) {
@@ -430,8 +441,12 @@ export function PosPage() {
                                         setTransferTo('CASH');
                                         notify('تم التحويل.');
                                     }
-                                    else
-                                        notify(res.body ?? res.error ?? 'فشل التحويل');
+                                    else if (res.unauthorized) {
+                                        notify('انتهت الجلسة. سجّل الدخول مرة أخرى.');
+                                    }
+                                    else {
+                                        notify(parseApiErrorBody(res.body, res.error ?? 'فشل التحويل'));
+                                    }
                                 }, children: "\u062A\u062D\u0648\u064A\u0644" })] })] }), _jsxs(Dialog, { open: shiftOpenDialog, onClose: () => setShiftOpenDialog(false), fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "\u0627\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0642\u0628\u0644 \u0627\u0644\u0628\u064A\u0639. \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u063A\u064A\u0631 \u0627\u0644\u0645\u062D\u0635\u0651\u0644\u0629 \u0639\u0644\u0649 \u0627\u0644\u062E\u0632\u0646\u0629 \u062A\u0628\u0642\u0649 \u0643\u062A\u0630\u0643\u064A\u0631." }), pendingCashHandoff ? (_jsxs(Alert, { severity: "info", children: [pendingCashHandoff.handedByName ?? 'الكاشير السابق', " \u0633\u0644\u0651\u0645\u0643", ' ', Number(pendingCashHandoff.cashAmount).toLocaleString('en-US'), " \u062C.\u0645 \u0646\u0642\u062F\u064A\u0629", ' ', "(\u0645\u0646 \u0648\u0631\u062F\u064A\u0629 ", pendingCashHandoff.fromShiftNumber, ")", pendingCashHandoff.uncollectedCount
                                             ? ` · ${pendingCashHandoff.uncollectedCount} طلب غير محصّل على الخزنة`
                                             : ''] })) : null, _jsx(TextField, { label: "\u0639\u0647\u062F\u0629 \u0627\u0644\u0641\u062A\u062D (\u0646\u0642\u062F\u064A)", type: "number", value: openingFloat, onChange: (e) => setOpeningFloat(e.target.value) })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setShiftOpenDialog(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", onClick: async () => {
