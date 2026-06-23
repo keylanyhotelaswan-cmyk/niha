@@ -1,4 +1,5 @@
 import { Box, Button, Card, CardContent, Chip, CircularProgress, Stack, Typography } from '@mui/material';
+import { memo } from 'react';
 import { getCollectionStatusLabel, type SavedOrder } from '../../../lib/pos-store.js';
 import { collectionTone, formatCurrency } from '../utils.js';
 import { ReprintMenuButton } from './reprint-menu-button.js';
@@ -22,7 +23,7 @@ type OrderSummaryCardProps = {
   actionBusy?: boolean;
 };
 
-export function OrderSummaryCard({ order, variant, onAction, actionLabel, onReprint, onViewAudit, onViewSummary, onEdit, showReprint, onUncollect, onCancel, onRequestCancel, onWithdrawCancel, actionBusy }: OrderSummaryCardProps) {
+export const OrderSummaryCard = memo(function OrderSummaryCard({ order, variant, onAction, actionLabel, onReprint, onViewAudit, onViewSummary, onEdit, showReprint, onUncollect, onCancel, onRequestCancel, onWithdrawCancel, actionBusy }: OrderSummaryCardProps) {
   const cancelPending = Boolean(order.cancelRequestedAt);
   const tone = collectionTone(order.collectionStatus, cancelPending);
   const accent = variant === 'suspended' ? '#d97706' : '#0f766e';
@@ -128,4 +129,4 @@ export function OrderSummaryCard({ order, variant, onAction, actionLabel, onRepr
       </CardContent>
     </Card>
   );
-}
+});

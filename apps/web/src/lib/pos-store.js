@@ -110,7 +110,7 @@ export function mapApiOrderToSavedOrder(order, status) {
         code: order.orderNumber,
         orderType,
         total: Number(order.totalAmount),
-        itemsCount: order.items?.length ?? 0,
+        itemsCount: order._count?.items ?? order.items?.length ?? 0,
         ownerName: order.customerName?.trim() ?? '',
         ...(order.customerPhone ? { customerPhone: order.customerPhone } : {}),
         ...(order.customerAddress ? { customerAddress: order.customerAddress } : {}),

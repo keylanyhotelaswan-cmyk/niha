@@ -1,4 +1,6 @@
-import { IsEnum, IsNumber, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsNumber, IsOptional, IsString } from 'class-validator';
+
+const EXPENSE_PAYMENT_METHODS = ['CASH', 'INSTAPAY', 'WALLET', 'CARD'] as const;
 
 export class CreateCashierExpenseDto {
   @IsString()
@@ -30,4 +32,9 @@ export class CreateCashierExpenseDto {
   @IsOptional()
   @IsString()
   note?: string;
+
+  /** طريقة الدفع التي خُصم منها المصروف (نقدي / انستاباي / محفظة) */
+  @IsOptional()
+  @IsIn(EXPENSE_PAYMENT_METHODS)
+  paymentMethod?: (typeof EXPENSE_PAYMENT_METHODS)[number];
 }

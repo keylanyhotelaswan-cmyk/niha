@@ -60,6 +60,10 @@ export function OrderConfirmDialog(props: OrderConfirmDialogProps) {
 
   useEffect(() => {
     if (props.open) setConfirmError('');
+    if (props.open) {
+      void import('../../../lib/pos-receipt-render.js');
+      void import('../../../lib/pos-print-bridge.js');
+    }
   }, [props.open]);
 
   return (

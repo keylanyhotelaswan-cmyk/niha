@@ -22,6 +22,9 @@ export async function apiCollectorSummary(branchId, date, token) {
 export async function apiCloseShift(dto, token) {
     return apiPost('/shifts/close', dto, token);
 }
+export async function apiShiftWalletTransfer(dto, token) {
+    return apiPost('/shifts/wallet-transfer', dto, token);
+}
 export async function apiShiftHandoffOptions(shiftId, token) {
     return apiGet(`/shifts/handoff-options?shiftId=${shiftId}`, token);
 }
@@ -125,6 +128,16 @@ export async function apiGetOrderAuditLogs(orderId, token) {
 export async function apiGetOrder(orderId, token) {
     return apiGet(`/orders/${orderId}`, token);
 }
+export async function apiListOrdersByShift(shiftId, opts, token) {
+    const params = new URLSearchParams({ shiftId, view: 'list' });
+    if (opts?.filter)
+        params.set('filter', opts.filter);
+    if (opts?.take != null)
+        params.set('take', String(opts.take));
+    if (opts?.cursor)
+        params.set('cursor', opts.cursor);
+    return apiGet(`/orders/by-shift?${params}`, token);
+}
 export async function apiListAuditLogs(query, token) {
     return apiGet(`/audit/logs?${query}`, token);
 }
@@ -166,6 +179,15 @@ export async function apiCreateCashierExpense(dto, token) {
 }
 export async function apiListExpenseStockItems(branchId, token) {
     return apiGet(`/cashier-expenses/stock-items?branchId=${branchId}`, token);
+}
+export async function apiGetProductionPlan(branchId, date, token) {
+    const params = new URLSearchParams({ branchId });
+    if (date)
+        params.set('date', date);
+    return apiGet(`/production-plan?${params}`, token);
+}
+export async function apiSaveProductionPlan(dto, token) {
+    return apiPost('/production-plan', dto, token);
 }
 export async function apiListCashBoxes(branchId, token) {
     return apiGet(`/cash-boxes?branchId=${branchId}`, token);

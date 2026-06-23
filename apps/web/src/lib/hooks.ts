@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { apiCloseShift, apiGetCustomer, apiListCustomers } from './api.js';
+import { useQuery, useMutation, useQueryClient, keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
+import { apiCloseShift, apiGetCustomer, apiListCustomers, apiListOrdersByShift } from './api.js';
 import { apiGet, apiPost, parseApiErrorBody } from './api-client.js';
 import { useAuth } from './auth-context.js';
 import { readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
@@ -11,15 +11,19 @@ function token(accessToken: string | null | undefined) {
 export const POS_QUERY_KEYS = {
   context: ['pos-context'] as const,
   shiftSummary: (shiftId?: string) => ['pos-shift-summary', shiftId] as const,
-  shiftClosed: (shiftId?: string) => ['orders-shift-closed', shiftId] as const,
+  shiftUncollected: (shiftId?: string) => ['orders-shift-uncollected', shiftId] as const,
+  shiftCollected: (shiftId?: string) => ['orders-shift-collected', shiftId] as const,
   suspended: (branchId?: string) => ['orders-suspended', branchId] as const,
   shiftCurrent: (branchId?: string, cashBoxId?: string) => ['shift-current', branchId, cashBoxId] as const,
 };
 
+export type ShiftOrdersPage = { orders: any[]; nextCursor: string | null };
+
 export function invalidatePosQueries(queryClient: ReturnType<typeof useQueryClient>) {
   queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.context });
   queryClient.invalidateQueries({ queryKey: ['pos-shift-summary'] });
-  queryClient.invalidateQueries({ queryKey: ['orders-shift-closed'] });
+  queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected'] });
+  queryClient.invalidateQueries({ queryKey: ['orders-shift-collected'] });
   queryClient.invalidateQueries({ queryKey: ['orders-suspended'] });
   queryClient.invalidateQueries({ queryKey: ['shift-current'] });
   queryClient.invalidateQueries({ queryKey: ['pos-catalog'] });
@@ -53,52 +57,121 @@ export function patchPosCachesAfterAutoOpen(
   });
 }
 
-/** تحديث خفيف بعد إغلاق طلب / تحصيل — بدون انتظار */
+/** تحديث خفيف بعد إغلاق طلب / تحصيل — ملخص فقط */
 export function refetchPosOrderData(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId?: string,
 ) {
   if (!shiftId) return;
   void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftId) });
-  void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftClosed(shiftId) });
+}
+
+function patchUncollectedList(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  updater: (orders: any[]) => any[],
+) {
+  queryClient.setQueryData<ShiftOrdersPage>(POS_QUERY_KEYS.shiftUncollected(shiftId), (old) => {
+    if (!old) return old;
+    return { ...old, orders: updater(old.orders ?? []) };
+  });
+}
+
+function patchCollectedPages(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  updater: (orders: any[]) => any[],
+) {
+  queryClient.setQueryData<{ pages: ShiftOrdersPage[]; pageParams: unknown[] }>(
+    POS_QUERY_KEYS.shiftCollected(shiftId),
+    (old) => {
+      if (!old?.pages?.length) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page, i) =>
+          i === 0 ? { ...page, orders: updater(page.orders ?? []) } : page,
+        ),
+      };
+    },
+  );
+}
+
+export function patchShiftOrderAdded(
+  queryClient: ReturnType<typeof useQueryClient>,
+  shiftId: string,
+  order: Record<string, unknown>,
+) {
+  const isUncollected =
+    order.collectionStatus === 'UNCOLLECTED' || order.paymentStatus === 'PENDING';
+  if (isUncollected) {
+    patchUncollectedList(queryClient, shiftId, (orders) => {
+      if (orders.some((o) => o.id === order.id)) return orders;
+      return [order, ...orders];
+    });
+  } else {
+    patchCollectedPages(queryClient, shiftId, (orders) => {
+      if (orders.some((o) => o.id === order.id)) return orders;
+      return [order, ...orders];
+    });
+  }
 }
 
 export function patchShiftOrderUncollected(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId: string,
   orderId: string,
+  orderSnapshot?: Record<string, unknown>,
 ) {
-  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
-    if (!old?.length) return old;
-    return old.map((order) =>
-      order.id === orderId
-        ? {
-            ...order,
-            collectionStatus: 'UNCOLLECTED',
-            paymentStatus: 'PENDING',
-          }
-        : order,
-    );
+  let moved: Record<string, unknown> | null = null;
+  patchCollectedPages(queryClient, shiftId, (orders) => {
+    const found = orders.find((o) => o.id === orderId);
+    if (found) moved = { ...found, collectionStatus: 'UNCOLLECTED', paymentStatus: 'PENDING' };
+    return orders.filter((order) => order.id !== orderId);
   });
+  const uncollectedOrder = orderSnapshot
+    ? { ...orderSnapshot, collectionStatus: 'UNCOLLECTED', paymentStatus: 'PENDING' }
+    : moved;
+  if (uncollectedOrder) {
+    patchUncollectedList(queryClient, shiftId, (orders) => {
+      if (orders.some((o) => o.id === orderId)) {
+        return orders.map((order) =>
+          order.id === orderId
+            ? { ...order, collectionStatus: 'UNCOLLECTED', paymentStatus: 'PENDING' }
+            : order,
+        );
+      }
+      return [uncollectedOrder, ...orders];
+    });
+  }
 }
 
 export function patchShiftOrderCollected(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId: string,
   orderId: string,
+  orderSnapshot?: Record<string, unknown>,
 ) {
-  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
-    if (!old?.length) return old;
-    return old.map((order) =>
-      order.id === orderId
-        ? {
-            ...order,
-            collectionStatus: 'PENDING_APPROVAL',
-            paymentStatus: 'PAID',
-          }
-        : order,
-    );
+  let moved: Record<string, unknown> | null = null;
+  patchUncollectedList(queryClient, shiftId, (orders) => {
+    const found = orders.find((o) => o.id === orderId);
+    if (found) moved = { ...found, collectionStatus: 'PENDING_APPROVAL', paymentStatus: 'PAID' };
+    return orders.filter((order) => order.id !== orderId);
   });
+  const collected = orderSnapshot
+    ? { ...orderSnapshot, collectionStatus: 'PENDING_APPROVAL', paymentStatus: 'PAID' }
+    : moved;
+  if (collected) {
+    patchCollectedPages(queryClient, shiftId, (orders) => {
+      if (orders.some((o) => o.id === orderId)) {
+        return orders.map((order) =>
+          order.id === orderId
+            ? { ...order, collectionStatus: 'PENDING_APPROVAL', paymentStatus: 'PAID' }
+            : order,
+        );
+      }
+      return [collected, ...orders];
+    });
+  }
 }
 
 export function patchShiftOrderRemoved(
@@ -106,10 +179,12 @@ export function patchShiftOrderRemoved(
   shiftId: string,
   orderId: string,
 ) {
-  queryClient.setQueryData<any[]>(POS_QUERY_KEYS.shiftClosed(shiftId), (old) => {
-    if (!old?.length) return old;
-    return old.filter((order) => order.id !== orderId);
-  });
+  patchUncollectedList(queryClient, shiftId, (orders) =>
+    orders.filter((order) => order.id !== orderId),
+  );
+  patchCollectedPages(queryClient, shiftId, (orders) =>
+    orders.filter((order) => order.id !== orderId),
+  );
 }
 
 export function useBranches() {
@@ -148,8 +223,8 @@ export function useCurrentShift(branchId?: string, cashBoxId?: string, enabled =
       return res.data;
     },
     enabled: enabled && !!accessToken && !!branchId && !!cashBoxId,
-    refetchInterval: 120000,
-    staleTime: 60000,
+    staleTime: 120000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -200,18 +275,63 @@ export function usePosCatalog(branchId?: string) {
   });
 }
 
-export function useShiftClosedOrders(shiftId?: string) {
+export function useShiftUncollectedOrders(shiftId?: string) {
   const { accessToken } = useAuth();
   return useQuery({
-    queryKey: ['orders-shift-closed', shiftId],
+    queryKey: POS_QUERY_KEYS.shiftUncollected(shiftId),
     queryFn: async () => {
-      const res = await apiGet<any[]>(`/orders/by-shift?shiftId=${shiftId}`, token(accessToken));
+      const res = await apiListOrdersByShift(shiftId!, { filter: 'uncollected' }, token(accessToken));
       if (!res.ok) throw new Error(res.body ?? res.error);
-      return res.data ?? [];
+      return res.data ?? { orders: [], nextCursor: null };
     },
     enabled: !!accessToken && !!shiftId,
-    staleTime: 15000,
+    staleTime: 60000,
+    refetchOnWindowFocus: false,
   });
+}
+
+export function useShiftCollectedOrders(shiftId?: string) {
+  const { accessToken } = useAuth();
+  return useInfiniteQuery({
+    queryKey: POS_QUERY_KEYS.shiftCollected(shiftId),
+    queryFn: async ({ pageParam }) => {
+      const res = await apiListOrdersByShift(
+        shiftId!,
+        {
+          filter: 'collected',
+          take: 10,
+          ...(pageParam ? { cursor: String(pageParam) } : {}),
+        },
+        token(accessToken),
+      );
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? { orders: [], nextCursor: null };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    enabled: !!accessToken && !!shiftId,
+    staleTime: 60000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/** @deprecated use useShiftUncollectedOrders + useShiftCollectedOrders */
+export function useShiftClosedOrders(shiftId?: string) {
+  const uncollected = useShiftUncollectedOrders(shiftId);
+  const collected = useShiftCollectedOrders(shiftId);
+  const orders = [
+    ...(uncollected.data?.orders ?? []),
+    ...(collected.data?.pages.flatMap((p) => p.orders) ?? []),
+  ];
+  return {
+    ...uncollected,
+    data: orders,
+    isPending: uncollected.isPending && collected.isPending,
+    isError: uncollected.isError || collected.isError,
+    refetch: async () => {
+      await Promise.all([uncollected.refetch(), collected.refetch()]);
+    },
+  };
 }
 
 export function usePosShiftSummary(shiftId?: string, initialSummary?: unknown) {
@@ -225,7 +345,8 @@ export function usePosShiftSummary(shiftId?: string, initialSummary?: unknown) {
     },
     enabled: !!accessToken && !!shiftId,
     ...(initialSummary != null ? { initialData: initialSummary } : {}),
-    staleTime: 15000,
+    staleTime: 60000,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -265,8 +386,8 @@ export function useSuspendedOrders(branchId?: string) {
       return res.data ?? [];
     },
     enabled: !!accessToken && !!branchId,
-    refetchOnMount: 'always',
-    staleTime: 0,
+    staleTime: 30000,
+    refetchOnWindowFocus: false,
     placeholderData: keepPreviousData,
   });
 }
@@ -383,7 +504,7 @@ export function useShiftMutations() {
       if (!res.ok) throw new Error(parseApiErrorBody(res.body, res.error ?? 'فشل فتح الوردية'));
       return res.data;
     },
-    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-closed', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
+    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
   });
   const closeShift = useMutation({
     mutationFn: async (dto: {
@@ -399,7 +520,7 @@ export function useShiftMutations() {
       if (!res.ok) throw new Error(parseApiErrorBody(res.body, res.error ?? 'فشل إغلاق الوردية'));
       return res.data;
     },
-    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-closed', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
+    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
   });
   return { openShift, closeShift };
 }

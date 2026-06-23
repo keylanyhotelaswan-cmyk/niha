@@ -2,6 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import { listPrinters } from './printers.mjs';
 import { printPngBase64, resolvePrinterName } from './print.mjs';
+import { printEscPosJobs } from './escpos.mjs';
+import { printEscPosImageJobs } from './escpos-image.mjs';
 
 const PORT = Number(process.env.NIHA_PRINT_PORT ?? 9321);
 const app = express();
@@ -49,10 +51,43 @@ app.post('/print', async (req, res) => {
         job.paperSize,
       );
       if (i < jobs.length - 1) {
-        await new Promise((r) => setTimeout(r, 2500));
+        await new Promise((r) => setTimeout(r, 450));
       }
     }
     res.json({ ok: true, printer: resolvedPrinter, count: jobs.length });
+  } catch (err) {
+    res.status(500).json({
+      ok: false,
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post('/print/escpos', async (req, res) => {
+  const printer = String(req.body?.printer ?? '').trim();
+  const jobs = Array.isArray(req.body?.jobs) ? req.body.jobs : [];
+  const settings = req.body?.settings ?? {};
+
+  if (!printer) {
+    res.status(400).json({ ok: false, message: 'اسم الطابعة مطلوب' });
+    return;
+  }
+  if (!jobs.length) {
+    res.status(400).json({ ok: false, message: 'لا توجد مهام طباعة' });
+    return;
+  }
+
+  try {
+    const hasImages = jobs.every((j) => j?.pngBase64);
+    const result = hasImages
+      ? await printEscPosImageJobs(printer, jobs, settings)
+      : await printEscPosJobs(printer, jobs, settings);
+    res.json({
+      ok: true,
+      printer: result.printer,
+      count: result.count,
+      mode: hasImages ? 'escpos-image' : 'escpos',
+    });
   } catch (err) {
     res.status(500).json({
       ok: false,

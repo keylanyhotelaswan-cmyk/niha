@@ -16,6 +16,7 @@
     "@mui/x-date-pickers": "^7.18.0",
     "@niha/contracts": "^0.1.0",
     "@tanstack/react-query": "^5.59.0",
+    "@tanstack/react-virtual": "^3.14.3",
     "html2canvas": "^1.4.1",
     "qz-tray": "^2.2.4",
     "react": "^18.3.1",

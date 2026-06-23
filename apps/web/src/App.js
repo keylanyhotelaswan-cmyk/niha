@@ -37,7 +37,7 @@ const router = createBrowserRouter([
         children: [
             { index: true, element: _jsx(HomeRedirect, {}) },
             { path: 'pos', element: _jsx(PosPage, {}) },
-            { path: 'shifts', element: _jsx(PermissionRoute, { permission: "shifts.access", children: _jsx(TreasuryWorkspacePage, {}) }) },
+            { path: 'shifts', element: _jsx(PermissionRoute, { anyOf: ['shifts.access', 'pos.use'], children: _jsx(TreasuryWorkspacePage, {}) }) },
             { path: 'settings', element: _jsx(PermissionRoute, { anyOf: ['treasury.manage', 'users.manage'], children: _jsx(SettingsHubPage, {}) }) },
             { path: 'settings/receipt', element: _jsx(PermissionRoute, { permission: "treasury.manage", children: _jsx(ReceiptSettingsPage, {}) }) },
             { path: 'settings/users', element: _jsx(PermissionRoute, { permission: "users.manage", children: _jsx(ManagerUsersPage, {}) }) },

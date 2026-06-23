@@ -28,10 +28,21 @@ import { OrderConfirmDialog } from './order-confirm-dialog.js';
 import type { DeliveryDriver } from '../../../lib/pos-receipt-settings.js';
 import { CustomerPhoneField, type CustomerSearchHit } from '../../../components/customer-phone-field.js';
 import { CaptainNameField } from '../../../components/captain-name-field.js';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef, memo } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
+import type { DailyPlan } from '../production-plan-utils.js';
+import {
+  planRemaining,
+  planSoldAdjustment,
+  planStatusLabel,
+  planVisualStatus,
+  summarizeCartPlanAlerts,
+} from '../production-plan-utils.js';
 
 type OrderModalProps = {
   open: boolean;
+  mode?: 'create' | 'edit';
+  editBaselineQty?: Map<string, number>;
   fullScreen: boolean;
   branchId: string;
   operatorName: string;
@@ -58,7 +69,7 @@ type OrderModalProps = {
   cartItems: CartItem[];
   cartQtyMap: Map<string, number>;
   onAddProduct: (p: any) => void;
-  onUpdateQty: (id: string, qty: number) => void;
+  onUpdateQty: (id: string, qty: number, productMeta?: { name: string; dailyPlan?: DailyPlan }) => void;
   onUpdateNote: (id: string, note: string) => void;
   paymentMethods: PaymentMethodOption[];
   paymentMethod: string;
@@ -77,14 +88,135 @@ type OrderModalProps = {
   onClose: () => void;
   onSuspend: () => void | Promise<{ ok: boolean; error?: string } | undefined>;
   onCloseOrder: () => void | Promise<void>;
+  onSaveEdit?: () => void | Promise<{ ok: boolean; error?: string } | undefined>;
   onClearCart: () => void;
   deliveryDrivers?: DeliveryDriver[];
   validateTakeawayCustomer?: () => { ok: true } | { ok: false; error: string };
   catalogPending?: boolean;
 };
 
+const PRODUCT_COLS = 4;
+const PRODUCT_ROW_HEIGHT = 112;
+
+const ProductCard = memo(function ProductCard({
+  product,
+  qty,
+  isEdit,
+  editBaselineQty,
+  onAddProduct,
+}: {
+  product: any;
+  qty: number;
+  isEdit: boolean;
+  editBaselineQty: Map<string, number>;
+  onAddProduct: (p: any) => void;
+}) {
+  const plan = product.dailyPlan as DailyPlan | undefined;
+  const soldAdj = plan ? planSoldAdjustment(isEdit, editBaselineQty.get(product.id) ?? 0) : 0;
+  const remaining = plan ? planRemaining(plan, qty, soldAdj) : null;
+  const status = plan ? planVisualStatus(plan, qty, soldAdj) : null;
+  const chip = status ? (() => {
+    if (status === 'exceeded') return { color: 'error' as const, variant: 'filled' as const };
+    if (status === 'exhausted') return { color: 'warning' as const, variant: 'filled' as const };
+    if (status === 'low') return { color: 'warning' as const, variant: 'outlined' as const };
+    return { color: 'success' as const, variant: 'outlined' as const };
+  })() : null;
+
+  return (
+    <Grid2 size={{ xs: 6, sm: 4, lg: 3 }}>
+      <Card
+        elevation={0}
+        sx={{
+          borderRadius: 3,
+          border: '2px solid',
+          borderColor: status === 'exceeded'
+            ? 'error.main'
+            : status === 'exhausted' || status === 'low'
+              ? 'warning.main'
+              : qty > 0
+                ? 'primary.main'
+                : 'rgba(117,89,77,0.14)',
+          opacity: product.isAvailable ? 1 : 0.5,
+          bgcolor: status === 'exceeded'
+            ? 'rgba(239,68,68,0.04)'
+            : status === 'low'
+              ? 'rgba(245,158,11,0.06)'
+              : '#fff',
+        }}
+      >
+        <CardActionArea disabled={!product.isAvailable} onClick={() => onAddProduct(product)}>
+          <CardContent sx={{ p: 1.5 }}>
+            <Stack spacing={0.75}>
+              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={0.5}>
+                <Typography fontWeight={700} fontSize="0.9rem" lineHeight={1.3}>{product.name}</Typography>
+                <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                  {plan && chip ? (
+                    <>
+                      <Chip
+                        size="small"
+                        label={`${plan.sold + soldAdj + qty}/${plan.planned}`}
+                        {...chip}
+                        sx={{ height: 22, fontSize: '0.68rem', fontWeight: 800 }}
+                      />
+                      {remaining != null && remaining >= 0 ? (
+                        <Chip size="small" label={`متب ${remaining}`} color={status === 'low' ? 'warning' : 'default'} variant="outlined" sx={{ height: 22, fontSize: '0.65rem', fontWeight: 700 }} />
+                      ) : remaining != null && remaining < 0 ? (
+                        <Chip size="small" label={`+${Math.abs(remaining)}`} color="error" sx={{ height: 22, fontSize: '0.65rem', fontWeight: 800 }} />
+                      ) : null}
+                    </>
+                  ) : null}
+                  {qty > 0 ? <Chip size="small" color="primary" label={qty} sx={{ minWidth: 28, fontWeight: 800 }} /> : null}
+                </Stack>
+              </Stack>
+              <Typography fontWeight={800} color="primary.main">{formatCurrency(product.salePrice)}</Typography>
+              {!product.isAvailable ? <Typography variant="caption" color="error">موقوف</Typography> : null}
+            </Stack>
+          </CardContent>
+        </CardActionArea>
+      </Card>
+    </Grid2>
+  );
+});
+
 export function OrderModal(props: OrderModalProps) {
+  const isEdit = props.mode === 'edit';
+  const editBaselineQty = props.editBaselineQty ?? new Map<string, number>();
   const tone = collectionTone(props.collectionStatus);
+
+  const productMetaMap = useMemo(() => {
+    const m = new Map<string, { name: string; dailyPlan?: DailyPlan }>();
+    props.products.forEach((p: any) => {
+      if (p.dailyPlan) m.set(p.id, { name: p.name, dailyPlan: p.dailyPlan as DailyPlan });
+    });
+    return m;
+  }, [props.products]);
+
+  const getPlanMeta = (productId: string, fallbackName: string) =>
+    productMetaMap.get(productId) ?? { name: fallbackName };
+
+  const cartPlanAlerts = useMemo(
+    () => summarizeCartPlanAlerts(
+      props.cartItems,
+      (id) => productMetaMap.get(id)?.dailyPlan,
+      isEdit,
+      editBaselineQty,
+    ),
+    [props.cartItems, productMetaMap, isEdit, editBaselineQty],
+  );
+
+  const handleSaveEdit = async () => {
+    const check = props.validateTakeawayCustomer?.();
+    if (check && !check.ok) {
+      setShowFieldErrors(true);
+      setValidationError(check.error);
+      return;
+    }
+    setShowFieldErrors(false);
+    setValidationError('');
+    setConfirmOpen(false);
+    const res = await props.onSaveEdit?.();
+    if (res && !res.ok && res.error) setValidationError(res.error);
+  };
   const handleCloseOrder = () => {
     const check = props.validateTakeawayCustomer?.();
     if (check && !check.ok) {
@@ -118,6 +250,31 @@ export function OrderModal(props: OrderModalProps) {
   const missingName = props.orderType === 'takeaway' && !props.orderOwnerName.trim();
   const missingPhone = props.orderType === 'takeaway' && !props.customerPhone.trim();
   const invalidPhone = props.orderType === 'takeaway' && props.customerPhone.trim() !== '' && !takeawayCheck.ok && takeawayCheck.missingLabels.includes('رقم تلفون صحيح');
+  const productListRef = useRef<HTMLDivElement>(null);
+
+  const visibleProducts = useMemo(() => {
+    const q = props.productSearch.trim().toLowerCase();
+    return props.products.filter((p: any) => {
+      const catOk = props.activeCategory === props.allCategoriesKey || p.categoryId === props.activeCategory;
+      const searchOk = !q || p.name.toLowerCase().includes(q);
+      return catOk && searchOk;
+    });
+  }, [props.products, props.activeCategory, props.allCategoriesKey, props.productSearch]);
+
+  const productRows = useMemo(() => {
+    const rows: any[][] = [];
+    for (let i = 0; i < visibleProducts.length; i += PRODUCT_COLS) {
+      rows.push(visibleProducts.slice(i, i + PRODUCT_COLS));
+    }
+    return rows;
+  }, [visibleProducts]);
+
+  const productRowVirtualizer = useVirtualizer({
+    count: productRows.length,
+    getScrollElement: () => productListRef.current,
+    estimateSize: () => PRODUCT_ROW_HEIGHT,
+    overscan: 3,
+  });
 
   useEffect(() => {
     if (!props.open) {
@@ -126,11 +283,6 @@ export function OrderModal(props: OrderModalProps) {
       setConfirmOpen(false);
     }
   }, [props.open]);
-  const visibleProducts = props.products.filter((p: any) => {
-    const catOk = props.activeCategory === props.allCategoriesKey || p.categoryId === props.activeCategory;
-    const searchOk = !props.productSearch.trim() || p.name.toLowerCase().includes(props.productSearch.trim().toLowerCase());
-    return catOk && searchOk;
-  });
 
   return (
     <Dialog
@@ -145,10 +297,16 @@ export function OrderModal(props: OrderModalProps) {
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
           <Box>
             <Typography variant="h6" fontWeight={800}>
-              {props.orderType === 'takeaway' ? 'طلب تيك أواي' : 'إنشاء طلب'}
+              {isEdit
+                ? `تعديل الفاتورة · طلب ${props.currentOrderCode}`
+                : props.orderType === 'takeaway'
+                  ? 'طلب تيك أواي'
+                  : 'إنشاء طلب'}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {props.currentOrderCode ? `طلب رقم ${props.currentOrderCode}` : 'طلب جديد'} · الكاشير: {props.operatorName}
+              {isEdit
+                ? `تعديل الأصناف والبيانات · الكاشير: ${props.operatorName}`
+                : `${props.currentOrderCode ? `طلب رقم ${props.currentOrderCode}` : 'طلب جديد'} · الكاشير: ${props.operatorName}`}
             </Typography>
           </Box>
           <Stack direction="row" spacing={1} alignItems="center">
@@ -224,7 +382,7 @@ export function OrderModal(props: OrderModalProps) {
                   </Grid2>
                 )}
                 <Grid2 size={{ xs: 12 }}>
-                  <OrderTypeToggle value={props.orderType} onChange={props.onOrderTypeChange} />
+                  <OrderTypeToggle value={props.orderType} onChange={props.onOrderTypeChange} disabled={isEdit} />
                 </Grid2>
               </Grid2>
 
@@ -254,45 +412,43 @@ export function OrderModal(props: OrderModalProps) {
                 ))}
               </Stack>
 
-              <Box sx={{ flex: 1, overflowY: 'auto', pr: 0.5 }}>
+              <Box ref={productListRef} sx={{ flex: 1, overflowY: 'auto', pr: 0.5 }}>
                 {props.catalogPending ? (
                   <Stack alignItems="center" justifyContent="center" py={4}>
                     <CircularProgress size={32} />
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>جاري تحميل الأصناف…</Typography>
                   </Stack>
                 ) : (
-                <Grid2 container spacing={1.25}>
-                  {visibleProducts.map((product: any) => {
-                    const qty = props.cartQtyMap.get(product.id) ?? 0;
+                <Box sx={{ height: productRowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
+                  {productRowVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const rowProducts = productRows[virtualRow.index] ?? [];
                     return (
-                      <Grid2 key={product.id} size={{ xs: 6, sm: 4, lg: 3 }}>
-                        <Card
-                          elevation={0}
-                          sx={{
-                            borderRadius: 3,
-                            border: qty > 0 ? '2px solid' : '1px solid rgba(117,89,77,0.14)',
-                            borderColor: qty > 0 ? 'primary.main' : 'rgba(117,89,77,0.14)',
-                            opacity: product.isAvailable ? 1 : 0.5,
-                            bgcolor: '#fff',
-                          }}
-                        >
-                          <CardActionArea disabled={!product.isAvailable} onClick={() => props.onAddProduct(product)}>
-                            <CardContent sx={{ p: 1.5 }}>
-                              <Stack spacing={0.75}>
-                                <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={0.5}>
-                                  <Typography fontWeight={700} fontSize="0.9rem" lineHeight={1.3}>{product.name}</Typography>
-                                  {qty > 0 ? <Chip size="small" color="primary" label={qty} sx={{ minWidth: 28, fontWeight: 800 }} /> : null}
-                                </Stack>
-                                <Typography fontWeight={800} color="primary.main">{formatCurrency(product.salePrice)}</Typography>
-                                {!product.isAvailable ? <Typography variant="caption" color="error">موقوف</Typography> : null}
-                              </Stack>
-                            </CardContent>
-                          </CardActionArea>
-                        </Card>
-                      </Grid2>
+                      <Box
+                        key={virtualRow.key}
+                        sx={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        <Grid2 container spacing={1.25}>
+                          {rowProducts.map((product: any) => (
+                            <ProductCard
+                              key={product.id}
+                              product={product}
+                              qty={props.cartQtyMap.get(product.id) ?? 0}
+                              isEdit={isEdit}
+                              editBaselineQty={editBaselineQty}
+                              onAddProduct={props.onAddProduct}
+                            />
+                          ))}
+                        </Grid2>
+                      </Box>
                     );
                   })}
-                </Grid2>
+                </Box>
                 )}
                 {!props.catalogPending && visibleProducts.length === 0 ? (
                   <Alert severity="info" sx={{ mt: 1 }}>لا توجد أصناف مطابقة.</Alert>
@@ -304,16 +460,45 @@ export function OrderModal(props: OrderModalProps) {
           <Grid2 size={{ xs: 12, md: 5 }} sx={{ height: '100%' }}>
             <Paper elevation={0} sx={{ p: 2, borderRadius: 4, height: '100%', border: '1px solid rgba(117,89,77,0.14)', bgcolor: '#fff', display: 'flex', flexDirection: 'column' }}>
               <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.5 }}>السلة · {props.cartItems.length} صنف</Typography>
+              {cartPlanAlerts.length > 0 ? (
+                <Alert severity="warning" sx={{ borderRadius: 2, mb: 1.5, py: 0.5 }}>
+                  <Stack spacing={0.25}>
+                    <Typography variant="caption" fontWeight={800}>تنبيهات خطة الإنتاج</Typography>
+                    {cartPlanAlerts.map((line) => (
+                      <Typography key={line} variant="caption" display="block">{line}</Typography>
+                    ))}
+                  </Stack>
+                </Alert>
+              ) : null}
               <Box sx={{ flex: 1, overflowY: 'auto', mb: 1.5 }}>
                 {props.cartItems.length === 0 ? (
                   <Alert severity="info" sx={{ borderRadius: 2 }}>اضغط على الأصناف لإضافتها.</Alert>
                 ) : (
                   <Stack spacing={1}>
-                    {props.cartItems.map((item) => (
-                      <Paper key={item.productId} variant="outlined" sx={{ p: 1.25, borderRadius: 2.5 }}>
+                    {props.cartItems.map((item) => {
+                      const plan = productMetaMap.get(item.productId)?.dailyPlan;
+                      const soldAdj = plan ? planSoldAdjustment(isEdit, editBaselineQty.get(item.productId) ?? 0) : 0;
+                      const planLabel = plan ? planStatusLabel(plan, item.quantity, soldAdj) : null;
+                      const planStatus = plan ? planVisualStatus(plan, item.quantity, soldAdj) : null;
+                      return (
+                      <Paper key={item.productId} variant="outlined" sx={{
+                        p: 1.25,
+                        borderRadius: 2.5,
+                        borderColor: planStatus === 'exceeded' ? 'error.main' : planStatus === 'low' || planStatus === 'exhausted' ? 'warning.main' : undefined,
+                        bgcolor: planStatus === 'exceeded' ? 'rgba(239,68,68,0.04)' : undefined,
+                      }}>
                         <Stack spacing={0.75}>
                           <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
                             <Typography fontWeight={700} fontSize="0.95rem" sx={{ flex: '0 1 auto' }}>{item.name}</Typography>
+                            {planLabel ? (
+                              <Chip
+                                size="small"
+                                label={planLabel}
+                                color={planStatus === 'exceeded' ? 'error' : 'warning'}
+                                variant={planStatus === 'exceeded' ? 'filled' : 'outlined'}
+                                sx={{ height: 22, fontSize: '0.68rem', fontWeight: 700 }}
+                              />
+                            ) : null}
                             <TextField
                               size="small"
                               placeholder="ملاحظة الصنف"
@@ -324,9 +509,9 @@ export function OrderModal(props: OrderModalProps) {
                             <Typography fontWeight={800} sx={{ ml: 'auto' }}>{formatCurrency(item.unitPrice * item.quantity)}</Typography>
                           </Stack>
                           <Stack direction="row" spacing={0.5} alignItems="center">
-                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity - 1)}>−</IconButton>
+                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity - 1, getPlanMeta(item.productId, item.name))}>−</IconButton>
                             <Chip label={item.quantity} size="small" />
-                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity + 1)}>+</IconButton>
+                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity + 1, getPlanMeta(item.productId, item.name))}>+</IconButton>
                             <Typography variant="caption" color="text.secondary">{formatCurrency(item.unitPrice)}</Typography>
                           </Stack>
                           {props.sauces && props.sauces.length > 0 && !paidSauceIds.has(item.productId) ? (
@@ -354,19 +539,19 @@ export function OrderModal(props: OrderModalProps) {
                           ) : null}
                         </Stack>
                       </Paper>
-                    ))}
+                    );})}
                   </Stack>
                 )}
               </Box>
               <Stack spacing={1.25}>
                 <Grid2 container spacing={1}>
                   <Grid2 size={6}>
-                    <TextField select size="small" fullWidth label="الدفع" value={props.paymentMethod} onChange={(e) => props.onPaymentMethod(e.target.value)}>
+                    <TextField select size="small" fullWidth label="الدفع" value={props.paymentMethod} onChange={(e) => props.onPaymentMethod(e.target.value)} disabled={isEdit}>
                       {props.paymentMethods.map((m) => <MenuItem key={m.id} value={m.id}>{m.label}</MenuItem>)}
                     </TextField>
                   </Grid2>
                   <Grid2 size={6}>
-                    <TextField select size="small" fullWidth label="التحصيل" value={props.collectionStatus} onChange={(e) => props.onCollectionStatus(e.target.value as CollectionStatus)}>
+                    <TextField select size="small" fullWidth label="التحصيل" value={props.collectionStatus} onChange={(e) => props.onCollectionStatus(e.target.value as CollectionStatus)} disabled={isEdit}>
                       <MenuItem value="approved">تم التحصيل (الدرج)</MenuItem>
                       <MenuItem value="uncollected">لم يُحصّل بعد</MenuItem>
                     </TextField>
@@ -393,37 +578,42 @@ export function OrderModal(props: OrderModalProps) {
       </DialogContent>
 
       <DialogActions sx={{ px: 2, py: 1.5, borderTop: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.98)' }}>
-        <Button onClick={props.onClearCart}>إفراغ</Button>
+        {!isEdit ? <Button onClick={props.onClearCart}>إفراغ</Button> : null}
         <Button onClick={props.onClose}>إلغاء</Button>
-        <Button variant="outlined" disabled={props.cartItems.length === 0} onClick={async () => {
-          const check = props.validateTakeawayCustomer?.();
-          if (check && !check.ok) {
-            setShowFieldErrors(true);
-            setValidationError(check.error);
-            return;
-          }
-          setShowFieldErrors(false);
-          const res = await props.onSuspend();
-          if (!res?.ok && (res as any)?.error) setValidationError((res as any).error);
-        }}>تعليق</Button>
+        {!isEdit ? (
+          <Button variant="outlined" disabled={props.cartItems.length === 0} onClick={async () => {
+            const check = props.validateTakeawayCustomer?.();
+            if (check && !check.ok) {
+              setShowFieldErrors(true);
+              setValidationError(check.error);
+              return;
+            }
+            setShowFieldErrors(false);
+            const res = await props.onSuspend();
+            if (!res?.ok && (res as any)?.error) setValidationError((res as any).error);
+          }}>تعليق</Button>
+        ) : null}
         <Button
           variant="contained"
           disabled={props.cartItems.length === 0}
-          onClick={handleCloseOrder}
+          onClick={isEdit ? () => void handleSaveEdit() : handleCloseOrder}
           sx={{ fontWeight: 800, px: 3 }}
         >
-          إغلاق وتأكيد · {formatCurrency(props.total)}
+          {isEdit ? `حفظ التعديلات · ${formatCurrency(props.total)}` : `إغلاق وتأكيد · ${formatCurrency(props.total)}`}
         </Button>
-        <Button
-          variant="text"
-          disabled={props.cartItems.length === 0}
-          onClick={openReview}
-          sx={{ fontWeight: 700 }}
-        >
-          مراجعة
-        </Button>
+        {!isEdit ? (
+          <Button
+            variant="text"
+            disabled={props.cartItems.length === 0}
+            onClick={openReview}
+            sx={{ fontWeight: 700 }}
+          >
+            مراجعة
+          </Button>
+        ) : null}
       </DialogActions>
 
+      {!isEdit ? (
       <OrderConfirmDialog
         open={confirmOpen}
         orderCode={props.currentOrderCode}
@@ -443,6 +633,7 @@ export function OrderModal(props: OrderModalProps) {
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleCloseOrder}
       />
+      ) : null}
     </Dialog>
   );
 }

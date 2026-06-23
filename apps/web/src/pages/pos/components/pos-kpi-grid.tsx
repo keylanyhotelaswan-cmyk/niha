@@ -84,13 +84,15 @@ export function PosKpiGrid({
         ))}
       </Grid2>
 
-      {shiftOpen && posSummary && onOpenSummaryPreview ? (
+      {shiftOpen && posSummary ? (
         <Paper elevation={0} sx={{ p: 2, borderRadius: 4, border: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.95)' }}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
             <Typography variant="subtitle2" fontWeight={800}>تحصيل الوردية (من الفتح حتى الآن)</Typography>
-            <Button size="small" variant="outlined" onClick={onOpenSummaryPreview}>
-              ملخص الوردية
-            </Button>
+            {onOpenSummaryPreview ? (
+              <Button size="small" variant="outlined" onClick={onOpenSummaryPreview}>
+                ملخص الوردية
+              </Button>
+            ) : null}
           </Stack>
           <ShiftCollectionBreakdown summary={posSummary} compact />
         </Paper>

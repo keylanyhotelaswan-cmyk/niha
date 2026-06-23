@@ -32,14 +32,50 @@ export function formatShiftOpenedAt(openedAt) {
 }
 const COLLECTION_METHODS = ['CASH', 'INSTAPAY', 'WALLET', 'CARD'];
 export function shiftCollectionRows(summary) {
+    const net = summary?.netSalesByMethod;
+    const expenses = summary?.expensesByPaymentMethod ?? {};
     const sales = summary?.salesByMethod ?? summary?.byPaymentMethod ?? {};
     return COLLECTION_METHODS.map((method) => {
+        const netRow = net?.[method];
+        if (netRow) {
+            return {
+                method,
+                label: paymentMethodLabel(method),
+                approved: netRow.approved,
+                pending: netRow.pending,
+                expense: netRow.expense,
+                transferOut: netRow.transferOut ?? 0,
+                transferIn: netRow.transferIn ?? 0,
+                gross: netRow.gross,
+                total: netRow.total,
+            };
+        }
         const row = sales[method];
         const approved = row?.approved ?? 0;
         const pending = row?.pending ?? 0;
-        const total = approved + pending;
-        return { method, label: paymentMethodLabel(method), approved, pending, total };
-    }).filter((r) => r.total > 0 || r.method === 'CASH');
+        const expense = Number(expenses[method] ?? 0);
+        const gross = approved + pending;
+        let deduct = expense;
+        const approvedNet = Math.max(0, approved - deduct);
+        deduct = Math.max(0, deduct - approved);
+        const pendingNet = Math.max(0, pending - deduct);
+        return {
+            method,
+            label: paymentMethodLabel(method),
+            approved: approvedNet,
+            pending: pendingNet,
+            expense,
+            transferOut: 0,
+            transferIn: 0,
+            gross,
+            total: approvedNet + pendingNet,
+        };
+    }).filter((r) => r.total > 0
+        || r.gross > 0
+        || r.expense > 0
+        || r.transferOut > 0
+        || r.transferIn > 0
+        || r.method === 'CASH');
 }
 /** @deprecated استخدم ShiftSummaryPreviewDialog */
 export function printShiftSummaryHtml(params) {

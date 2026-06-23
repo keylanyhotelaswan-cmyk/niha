@@ -3,7 +3,6 @@ import {
   Box,
   Button,
   Chip,
-  CircularProgress,
   Dialog,
   DialogActions,
   DialogContent,
@@ -22,24 +21,25 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import type { SavedOrder } from '../../lib/pos-store.js';
-import { buildReceiptFromSavedOrder, printPosReceipt, type PrintCopies } from '../../lib/pos-receipt.js';
+import { buildReceiptFromSavedOrder, type PrintCopies } from '../../lib/pos-receipt.js';
+import { enqueuePosPrint, preloadPosPrintPipeline } from '../../lib/pos-print-queue.js';
+import { fetchOrderDetailForPos } from '../../lib/pos-order-detail.js';
 import { isPrintBridgeOnline } from '../../lib/pos-print-bridge.js';
 import { getReceiptSettings } from '../../lib/pos-receipt-settings.js';
 import { OrderAuditDialog } from './components/order-audit-dialog.js';
 import { OrderSummaryDialog } from './components/order-summary-dialog.js';
-import { OrderEditDialog, type OrderAmendPayload } from './components/order-edit-dialog.js';
-import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
-import { apiAmendOrder, apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
+import { apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
 import { parseApiErrorBody } from '../../lib/api-client.js';
 import { patchShiftOrderRemoved, patchShiftOrderUncollected } from '../../lib/hooks.js';
 import { ShiftCloseDialog } from '../treasury-workspace/components/shift-close-dialog.js';
 import { ShiftSummaryPreviewDialog } from '../treasury-workspace/components/shift-summary-preview-dialog.js';
 import type { ShiftSummaryPrintParams } from '../../lib/shift-summary-print.js';
-import { formatShiftDuration, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
+import { formatShiftDuration, formatShiftMoney, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
 import { ALL_CATEGORIES, type PaymentMethodOption } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
 import { OrderModal } from './components/order-modal.js';
 import { PosKpiGrid } from './components/pos-kpi-grid.js';
+import { ProductionPlanDialog } from './components/production-plan-dialog.js';
 import { PrintSetupDialog } from './components/print-setup-dialog.js';
 import { ShiftOrdersSection } from './components/shift-orders-section.js';
 import { SuspendedSection } from './components/suspended-section.js';
@@ -64,12 +64,27 @@ export function PosPage() {
   const canManagePrint = canManagePosPrinting(permissions);
   const canUsePrint = workspace.printingEnabled;
   const canTreasury = hasPermission(permissions, 'shifts.access');
+  const canOpenShiftWorkspace = canTreasury || hasPermission(permissions, 'pos.use');
   const catalog = usePosCatalog(workspace.effectiveBranchId, workspace.accessToken);
   const [snack, setSnack] = useState('');
+  const [snackSeverity, setSnackSeverity] = useState<'success' | 'warning' | 'error' | 'info'>('success');
+  const productPlanMap = useMemo(() => {
+    const m = new Map<string, { planned: number; sold: number }>();
+    catalog.products.forEach((p) => {
+      if (p.dailyPlan) m.set(p.id, p.dailyPlan);
+    });
+    return m;
+  }, [catalog.products]);
   const order = usePosOrderSession(workspace, {
     paymentMethods: catalog.paymentMethods,
     setActiveCategory: catalog.setActiveCategory,
-    onNotify: (msg) => setSnack(msg),
+    onNotify: (msg) => {
+      setSnack(msg);
+      if (msg.includes('أكبر من الخطة') || msg.includes('فوق الخطة')) setSnackSeverity('error');
+      else if (msg.includes('قربت تخلص') || msg.includes('اكتملت')) setSnackSeverity('warning');
+      else setSnackSeverity('info');
+    },
+    getProductDailyPlan: (id) => productPlanMap.get(id),
   });
 
   const [shiftOrdersTab, setShiftOrdersTab] = useState<'uncollected' | 'collected'>('uncollected');
@@ -85,7 +100,6 @@ export function PosPage() {
   const [collectOpen, setCollectOpen] = useState(false);
   const [collectOrder, setCollectOrder] = useState<SavedOrder | null>(null);
   const [collectPayment, setCollectPayment] = useState('cash');
-  const [collectBusy, setCollectBusy] = useState(false);
   const [collectError, setCollectError] = useState('');
   const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const collectInFlight = useRef(false);
@@ -98,16 +112,28 @@ export function PosPage() {
   const [expenseStockItemId, setExpenseStockItemId] = useState('');
   const [expenseQty, setExpenseQty] = useState('0');
   const [expenseUnitPrice, setExpenseUnitPrice] = useState('0');
+  const [expensePaymentMethod, setExpensePaymentMethod] = useState<'CASH' | 'INSTAPAY' | 'WALLET'>('CASH');
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferFrom, setTransferFrom] = useState<'CASH' | 'INSTAPAY' | 'WALLET'>('INSTAPAY');
+  const [transferTo, setTransferTo] = useState<'CASH' | 'INSTAPAY' | 'WALLET'>('CASH');
+  const [transferAmount, setTransferAmount] = useState('0');
+  const [transferNote, setTransferNote] = useState('');
+  const [productionPlanOpen, setProductionPlanOpen] = useState(false);
   const [auditOrder, setAuditOrder] = useState<SavedOrder | null>(null);
   const [summaryOrder, setSummaryOrder] = useState<SavedOrder | null>(null);
-  const [editOrder, setEditOrder] = useState<SavedOrder | null>(null);
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const deliveryDrivers = getReceiptSettings().deliveryDrivers;
 
   const { data: stockItems = [] } = usePosExpenseStock(workspace.effectiveBranchId, expenseOpen && expenseKind === 'ITEM');
 
+  const transferAvailable = useMemo(() => {
+    const net = workspace.displayPosSummary?.netSalesByMethod?.[transferFrom];
+    return net?.total ?? 0;
+  }, [workspace.displayPosSummary, transferFrom]);
+
   useEffect(() => {
     if (workspace.shiftOpen && canUsePrint) {
+      preloadPosPrintPipeline();
       void isPrintBridgeOnline();
     }
   }, [workspace.shiftOpen, canUsePrint]);
@@ -138,17 +164,20 @@ export function PosPage() {
     return m;
   }, [order.cartItems]);
 
-  const notify = (msg: string) => setSnack(msg);
+  const notify = (msg: string) => {
+    setSnack(msg);
+    setSnackSeverity('success');
+  };
 
-  const shiftSummaryPreviewParams: ShiftSummaryPrintParams | null = workspace.shiftOpen && workspace.posSummary ? {
+  const shiftSummaryPreviewParams: ShiftSummaryPrintParams | null = workspace.shiftOpen && workspace.displayPosSummary ? {
     shiftNumber: workspace.shift?.shiftNumber,
     cashierName: workspace.shiftOperatorName,
     openedAt: workspace.shift?.openedAt,
     summary: {
-      ...workspace.posSummary,
-      uncollectedCount: workspace.posSummary.uncollectedCount ?? workspace.uncollectedOrders.length,
-      uncollectedTotal: workspace.posSummary.uncollectedTotal ?? workspace.uncollectedAmount,
-      uncollectedOrders: workspace.posSummary.uncollectedOrders ?? workspace.uncollectedOrders.map((o) => ({
+      ...workspace.displayPosSummary,
+      uncollectedCount: workspace.displayPosSummary.uncollectedCount ?? workspace.uncollectedOrders.length,
+      uncollectedTotal: workspace.displayPosSummary.uncollectedTotal ?? workspace.uncollectedAmount,
+      uncollectedOrders: workspace.displayPosSummary.uncollectedOrders ?? workspace.uncollectedOrders.map((o) => ({
         orderNumber: o.code,
         total: o.total,
         customerName: o.ownerName || null,
@@ -166,7 +195,7 @@ export function PosPage() {
   const handlePrintResult = (printRes: { ok: boolean; message?: string; reason?: string; copies?: string; method?: string }) => {
     if (printRes.ok) {
       const label = printRes.copies === 'customer' ? 'نسخة الزبون' : printRes.copies === 'kitchen' ? 'نسخة المطبخ' : 'نسخة الشيف + الزبون';
-      const via = printRes.method === 'bridge' ? 'Print Bridge' : 'QZ';
+      const via = printRes.method === 'escpos' ? 'ESC/POS' : printRes.method === 'bridge' ? 'Print Bridge' : 'QZ';
       notify(`تمت الطباعة الصامتة (${label}) عبر ${via}`);
       return;
     }
@@ -176,8 +205,13 @@ export function PosPage() {
 
   const handleReprint = async (savedOrder: SavedOrder, copies: PrintCopies) => {
     if (!canUsePrint) return;
+    const token = workspace.accessToken;
+    const detail = token && (!savedOrder.items.length || savedOrder.itemsCount > savedOrder.items.length)
+      ? await fetchOrderDetailForPos(savedOrder.id, token)
+      : savedOrder;
+    const orderForPrint = detail ?? savedOrder;
     const brand = getStoreBranding();
-    const receipt = buildReceiptFromSavedOrder(savedOrder, {
+    const receipt = buildReceiptFromSavedOrder(orderForPrint, {
       storeName: brand.storeName,
       storeSubtitle: brand.storeSubtitle,
       storeFooter: brand.storeFooter,
@@ -187,36 +221,9 @@ export function PosPage() {
       shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
       isPaid: savedOrder.collectionStatus !== 'uncollected',
     });
-    const printRes = await printPosReceipt(receipt, { force: true, silent: true, copies });
-    handlePrintResult(printRes);
-  };
-
-  const handleAmendOrder = async (payload: OrderAmendPayload) => {
-    if (!editOrder || !workspace.accessToken) {
-      return { ok: false, error: 'غير مسجل' };
-    }
-    const res = await apiAmendOrder(editOrder.id, {
-      customerName: payload.customerName,
-      customerPhone: payload.customerPhone,
-      customerAddress: payload.customerAddress,
-      captainName: payload.captainName,
-      note: payload.note,
-      items: payload.items.map((item) => {
-        const note = itemNoteForApi(item);
-        return {
-          productId: item.productId,
-          quantity: item.quantity,
-          unitPrice: item.unitPrice,
-          ...(note ? { note } : {}),
-        };
-      }),
-    }, workspace.accessToken);
-    if (!res.ok) {
-      return { ok: false, error: parseApiErrorBody(res.body, res.error ?? 'فشل حفظ التعديل') };
-    }
-    await workspace.refreshAfterOrder();
-    notify(`تم تعديل طلب ${editOrder.code}`);
-    return { ok: true };
+    enqueuePosPrint(receipt, { force: true, silent: true, copies }, (printRes) => {
+      handlePrintResult(printRes);
+    });
   };
 
   const handleUncollect = async (order: SavedOrder) => {
@@ -279,27 +286,39 @@ export function PosPage() {
     })();
   };
 
-  const runCollect = async (withPrint: boolean) => {
+  useEffect(() => {
+    if (collectOpen) preloadPosPrintPipeline();
+  }, [collectOpen]);
+
+  const runCollect = (withPrint: boolean) => {
     if (!collectOrder || collectInFlight.current) return;
     collectInFlight.current = true;
-    setCollectBusy(true);
-    setCollectError('');
+
     const order = collectOrder;
     const payment = collectPayment;
-    setPendingOrderId(order.id);
-    try {
-      const res = await workspace.collectOrder(order, payment);
-      if (!res.ok) {
-        setCollectError(parseApiErrorBody((res as any).body, (res as any).error ?? 'فشل التحصيل'));
-        notify(parseApiErrorBody((res as any).body, (res as any).error ?? 'فشل التحصيل'));
-        return;
-      }
-      setCollectOpen(false);
-      setCollectOrder(null);
-      notify(`تم تحصيل ${order.code} في الدرج`);
-      if (withPrint && canUsePrint) {
-        const brand = getStoreBranding();
-        const receipt = buildReceiptFromSavedOrder(order, {
+    const shiftId = workspace.effectiveShiftId;
+
+    setCollectOpen(false);
+    setCollectOrder(null);
+    setCollectError('');
+
+    const res = workspace.collectOrder(order, payment, (message) => {
+      notify(parseApiErrorBody(message, message));
+      void workspace.refreshAfterOrder(shiftId);
+    });
+
+    if (!res.ok) {
+      notify(res.error ?? 'فشل التحصيل');
+      collectInFlight.current = false;
+      return;
+    }
+
+    notify(`تم تحصيل ${order.code} في الدرج`);
+
+    if (withPrint && canUsePrint) {
+      const brand = getStoreBranding();
+      const printFromOrder = (orderForPrint: SavedOrder) => {
+        const receipt = buildReceiptFromSavedOrder(orderForPrint, {
           storeName: brand.storeName,
           storeSubtitle: brand.storeSubtitle,
           storeFooter: brand.storeFooter,
@@ -309,14 +328,22 @@ export function PosPage() {
           shiftNumber: workspace.shift?.shiftNumber != null ? String(workspace.shift.shiftNumber) : '1',
           isPaid: true,
         });
-        const printRes = await printPosReceipt(receipt, { force: true, silent: true, copies: 'customer' });
-        handlePrintResult(printRes);
+        enqueuePosPrint(receipt, { force: true, silent: true, copies: 'customer' }, (printRes) => {
+          handlePrintResult(printRes);
+        });
+      };
+
+      const needsDetail = !order.items.length || order.itemsCount > order.items.length;
+      if (needsDetail && workspace.accessToken) {
+        void fetchOrderDetailForPos(order.id, workspace.accessToken).then((detail) => {
+          printFromOrder(detail ?? order);
+        });
+      } else {
+        printFromOrder(order);
       }
-    } finally {
-      collectInFlight.current = false;
-      setCollectBusy(false);
-      setPendingOrderId(null);
     }
+
+    collectInFlight.current = false;
   };
 
   const shiftKnown = !workspace.shiftStatusPending;
@@ -346,8 +373,8 @@ export function PosPage() {
 
   return (
     <Stack spacing={2.5}>
-      <Snackbar open={Boolean(snack)} autoHideDuration={4000} onClose={() => setSnack('')} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
-        <Alert severity="success" variant="filled" onClose={() => setSnack('')} sx={{ width: '100%' }}>{snack}</Alert>
+      <Snackbar open={Boolean(snack)} autoHideDuration={5000} onClose={() => setSnack('')} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}>
+        <Alert severity={snackSeverity} variant="filled" onClose={() => setSnack('')} sx={{ width: '100%', maxWidth: 480 }}>{snack}</Alert>
       </Snackbar>
 
       {shiftKnown && !workspace.shiftOpen && workspace.contextReady ? (
@@ -412,7 +439,7 @@ export function PosPage() {
                 إعدادات الفاتورة
               </Button>
             ) : null}
-            {canTreasury ? (
+            {canOpenShiftWorkspace && workspace.shiftOpen ? (
               <Button
                 variant="outlined"
                 size="small"
@@ -422,7 +449,7 @@ export function PosPage() {
                 {canManagePrint ? 'الخزنة والورديات' : 'ورديتي المفتوحة'}
               </Button>
             ) : null}
-            {workspace.shiftOpen && workspace.posSummary ? (
+            {workspace.shiftOpen && workspace.displayPosSummary ? (
               <Button
                 variant="outlined"
                 size="small"
@@ -439,7 +466,9 @@ export function PosPage() {
             ) : null}
             {workspace.shiftOpen ? (
               <>
+                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setProductionPlanOpen(true)}>خطة الإنتاج</Button>
                 <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setExpenseOpen(true)}>مصروف</Button>
+                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setTransferOpen(true)}>تحويل</Button>
                 <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setShiftCloseDialog(true)}>
                   {(workspace.uncollectedOrders?.length ?? 0) + (workspace.posSummary?.suspendedCount ?? 0) > 0 ? 'تسليم وردية' : 'إغلاق وردية'}
                 </Button>
@@ -462,7 +491,7 @@ export function PosPage() {
 
       <PosKpiGrid
         shiftOpen={workspace.shiftOpen}
-        posSummary={workspace.posSummary}
+        posSummary={workspace.displayPosSummary}
         uncollectedCount={workspace.uncollectedOrders.length}
         uncollectedAmount={workspace.uncollectedAmount}
         suspendedCount={workspace.suspendedOrders.length}
@@ -496,13 +525,34 @@ export function PosPage() {
         showReprint={canUsePrint}
         onReprint={handleReprint}
         onViewAudit={(o) => setAuditOrder(o)}
-        onViewSummary={(o) => setSummaryOrder(o)}
-        onEdit={(o) => setEditOrder(o)}
+        onViewSummary={async (o) => {
+          const token = workspace.accessToken;
+          if (token && !o.items.length && o.itemsCount > 0) {
+            const detail = await fetchOrderDetailForPos(o.id, token);
+            setSummaryOrder(detail ?? o);
+            return;
+          }
+          setSummaryOrder(o);
+        }}
+        onEdit={async (o) => {
+          const token = workspace.accessToken;
+          if (token && !o.items.length && o.itemsCount > 0) {
+            const detail = await fetchOrderDetailForPos(o.id, token);
+            if (detail) {
+              order.openEditOrder(detail);
+              return;
+            }
+          }
+          order.openEditOrder(o);
+        }}
         onUncollect={handleUncollect}
         onCancel={handleCancel}
         onRequestCancel={handleRequestCancel}
         onWithdrawCancel={handleWithdrawCancel}
         pendingOrderId={pendingOrderId}
+        hasMoreCollected={workspace.hasMoreCollected}
+        collectedLoadingMore={workspace.collectedLoadingMore}
+        onLoadMoreCollected={() => workspace.fetchNextCollectedPage?.()}
       />
 
       <Fab
@@ -517,6 +567,8 @@ export function PosPage() {
 
       <OrderModal
         open={order.modalOpen}
+        mode={order.editMode ? 'edit' : 'create'}
+        editBaselineQty={order.editBaselineQty}
         fullScreen={fullScreenModal}
         branchId={workspace.effectiveBranchId}
         operatorName={workspace.operatorName}
@@ -573,6 +625,12 @@ export function PosPage() {
           return { ok: true as const };
         }}
         onCloseOrder={() => { void order.closeOrder(); }}
+        onSaveEdit={async () => {
+          const res = await order.saveEditedOrder();
+          if (res.ok) notify(`تم حفظ تعديلات الطلب.`);
+          else notify(parseApiErrorBody((res as { error?: string }).error, 'فشل حفظ التعديل'));
+          return res;
+        }}
         onClearCart={() => { order.resetOrder(); notify('تم إفراغ السلة.'); }}
       />
 
@@ -596,38 +654,34 @@ export function PosPage() {
         onClose={() => setSummaryOrder(null)}
       />
 
-      <OrderEditDialog
-        open={Boolean(editOrder)}
+      <ProductionPlanDialog
+        open={productionPlanOpen}
         branchId={workspace.effectiveBranchId}
-        order={editOrder}
-        products={catalog.products}
-        sauces={catalog.sauces}
-        paidSauceProductIds={catalog.paidSauceProductIds}
-        deliveryDrivers={deliveryDrivers}
-        onClose={() => setEditOrder(null)}
-        onSave={handleAmendOrder}
+        accessToken={workspace.accessToken}
+        onClose={() => setProductionPlanOpen(false)}
+        onSaved={() => {
+          notify('تم حفظ خطة الإنتاج.');
+          void catalog.reload();
+        }}
       />
 
-      <Dialog open={collectOpen} onClose={collectBusy ? undefined : () => { setCollectOpen(false); setCollectError(''); }} fullWidth maxWidth="xs">
+      <Dialog open={collectOpen} onClose={() => { setCollectOpen(false); setCollectError(''); }} fullWidth maxWidth="xs">
         <DialogTitle>تسجيل تحصيل في الدرج</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {collectError ? <Alert severity="error">{collectError}</Alert> : null}
             <TextField label="رقم الطلب" value={collectOrder?.code ?? ''} InputProps={{ readOnly: true }} />
             <TextField label="الإجمالي" value={collectOrder ? formatCurrency(collectOrder.total) : ''} InputProps={{ readOnly: true }} />
-            <TextField select label="طريقة الدفع" value={collectPayment} onChange={(e) => setCollectPayment(e.target.value)} disabled={collectBusy}>
+            <TextField select label="طريقة الدفع" value={collectPayment} onChange={(e) => setCollectPayment(e.target.value)}>
               {catalog.paymentMethods.map((m) => <MenuItem key={m.id} value={m.id}>{m.label}</MenuItem>)}
             </TextField>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }}>
-          <Button onClick={() => { setCollectOpen(false); setCollectError(''); }} disabled={collectBusy}>إلغاء</Button>
-          <Button variant="outlined" disabled={collectBusy} {...(collectBusy ? { startIcon: <CircularProgress size={16} /> } : {})} onClick={() => void runCollect(false)}>
-            {collectBusy ? 'جاري التحصيل…' : 'تحصيل فقط'}
-          </Button>
+          <Button onClick={() => { setCollectOpen(false); setCollectError(''); }}>إلغاء</Button>
+          <Button variant="outlined" onClick={() => runCollect(false)}>تحصيل فقط</Button>
           {canUsePrint ? (
-            <Button variant="contained" disabled={collectBusy} {...(collectBusy ? { startIcon: <CircularProgress size={16} color="inherit" /> } : {})} onClick={() => void runCollect(true)}>
-              {collectBusy ? 'جاري التحصيل…' : 'تحصيل وطباعة'}
+            <Button variant="contained" onClick={() => runCollect(true)}>تحصيل وطباعة</Button>
             </Button>
           ) : null}
         </DialogActions>
@@ -641,7 +695,19 @@ export function PosPage() {
         <DialogTitle>تسجيل مصروف من الوردية</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
-            <Alert severity="info" sx={{ borderRadius: 2 }}>يُخصم من عهدة الكاشير (الدرج) وليس من خزنة الإدارة.</Alert>
+            <Alert severity="info" sx={{ borderRadius: 2 }}>
+              يُخصم من حساب الدفع المختار (نقدي من الدرج، أو انستاباي/محفظة من رصيد الوردية).
+            </Alert>
+            <TextField
+              select
+              label="طريقة الدفع"
+              value={expensePaymentMethod}
+              onChange={(e) => setExpensePaymentMethod(e.target.value as 'CASH' | 'INSTAPAY' | 'WALLET')}
+            >
+              <MenuItem value="CASH">نقدي (الدرج)</MenuItem>
+              <MenuItem value="INSTAPAY">انستاباي</MenuItem>
+              <MenuItem value="WALLET">محفظة</MenuItem>
+            </TextField>
             <TextField select label="نوع المصروف" value={expenseKind} onChange={(e) => setExpenseKind(e.target.value as 'GENERAL' | 'ITEM')}>
               <MenuItem value="GENERAL">مصروف عام</MenuItem>
               <MenuItem value="ITEM">شراء خامات</MenuItem>
@@ -672,16 +738,88 @@ export function PosPage() {
           <Button variant="contained" disabled={!workspace.shiftOpen} onClick={async () => {
             const res = await workspace.createExpense(
               expenseKind === 'ITEM'
-                ? { kind: 'ITEM', stockItemId: expenseStockItemId, quantity: Number(expenseQty) || 0, unitPrice: Number(expenseUnitPrice) || 0, note: expenseNote }
-                : { kind: 'GENERAL', amount: Number(expenseAmount) || 0, note: expenseNote },
+                ? { kind: 'ITEM', stockItemId: expenseStockItemId, quantity: Number(expenseQty) || 0, unitPrice: Number(expenseUnitPrice) || 0, note: expenseNote, paymentMethod: expensePaymentMethod }
+                : { kind: 'GENERAL', amount: Number(expenseAmount) || 0, note: expenseNote, paymentMethod: expensePaymentMethod },
             );
             if (res.ok) {
               setExpenseOpen(false);
               setExpenseAmount('0');
               setExpenseNote('');
+              setExpensePaymentMethod('CASH');
               notify('تم تسجيل المصروف.');
             } else notify((res as any).body ?? (res as any).error ?? 'فشل تسجيل المصروف');
           }}>حفظ</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={transferOpen} onClose={() => setTransferOpen(false)} fullWidth maxWidth="sm">
+        <DialogTitle>تحويل بين حسابات الوردية</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <Alert severity="info" sx={{ borderRadius: 2 }}>
+              لو عميل دفع انستاباي وتسلّم تمن دليفري كاش — حوّل من انستاباي إلى نقدي. هذا ليس مصروفاً.
+            </Alert>
+            <TextField
+              select
+              label="من"
+              value={transferFrom}
+              onChange={(e) => setTransferFrom(e.target.value as 'CASH' | 'INSTAPAY' | 'WALLET')}
+            >
+              <MenuItem value="CASH">نقدي (الدرج)</MenuItem>
+              <MenuItem value="INSTAPAY">انستاباي</MenuItem>
+              <MenuItem value="WALLET">محفظة</MenuItem>
+            </TextField>
+            <TextField
+              select
+              label="إلى"
+              value={transferTo}
+              onChange={(e) => setTransferTo(e.target.value as 'CASH' | 'INSTAPAY' | 'WALLET')}
+            >
+              <MenuItem value="CASH">نقدي (الدرج)</MenuItem>
+              <MenuItem value="INSTAPAY">انستاباي</MenuItem>
+              <MenuItem value="WALLET">محفظة</MenuItem>
+            </TextField>
+            <Typography variant="body2" color="text.secondary">
+              المتاح في «من»: {formatShiftMoney(transferAvailable)}
+            </Typography>
+            <TextField label="المبلغ" type="number" value={transferAmount} onChange={(e) => setTransferAmount(e.target.value)} />
+            <TextField
+              label="البيان (اختياري)"
+              placeholder="مثال: تسليم تمن دليفري كاش"
+              value={transferNote}
+              onChange={(e) => setTransferNote(e.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setTransferOpen(false)}>إلغاء</Button>
+          <Button
+            variant="contained"
+            disabled={!workspace.shiftOpen || transferFrom === transferTo}
+            onClick={async () => {
+              const amount = Number(transferAmount) || 0;
+              if (amount <= 0) {
+                notify('أدخل مبلغاً أكبر من صفر');
+                return;
+              }
+              const res = await workspace.transferWallet({
+                fromPaymentMethod: transferFrom,
+                toPaymentMethod: transferTo,
+                amount,
+                ...(transferNote.trim() ? { note: transferNote.trim() } : {}),
+              });
+              if (res.ok) {
+                setTransferOpen(false);
+                setTransferAmount('0');
+                setTransferNote('');
+                setTransferFrom('INSTAPAY');
+                setTransferTo('CASH');
+                notify('تم التحويل.');
+              } else notify((res as any).body ?? (res as any).error ?? 'فشل التحويل');
+            }}
+          >
+            تحويل
+          </Button>
         </DialogActions>
       </Dialog>
 

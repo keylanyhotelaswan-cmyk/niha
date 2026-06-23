@@ -33,6 +33,16 @@ export async function apiCloseShift(dto: {
   return apiPost('/shifts/close', dto, token);
 }
 
+export async function apiShiftWalletTransfer(dto: {
+  shiftId: string;
+  fromPaymentMethod: 'CASH' | 'INSTAPAY' | 'WALLET';
+  toPaymentMethod: 'CASH' | 'INSTAPAY' | 'WALLET';
+  amount: number;
+  note?: string;
+}, token?: string) {
+  return apiPost('/shifts/wallet-transfer', dto, token);
+}
+
 export async function apiShiftHandoffOptions(shiftId: string, token?: string) {
   return apiGet<{
     shift: { id: string; shiftNumber: string; cashBoxId: string; cashBoxName: string; cashierName: string };
@@ -234,6 +244,18 @@ export async function apiGetOrder(orderId: string, token?: string) {
   return apiGet(`/orders/${orderId}`, token);
 }
 
+export async function apiListOrdersByShift(
+  shiftId: string,
+  opts?: { filter?: 'all' | 'uncollected' | 'collected'; take?: number; cursor?: string },
+  token?: string,
+) {
+  const params = new URLSearchParams({ shiftId, view: 'list' });
+  if (opts?.filter) params.set('filter', opts.filter);
+  if (opts?.take != null) params.set('take', String(opts.take));
+  if (opts?.cursor) params.set('cursor', opts.cursor);
+  return apiGet<{ orders: unknown[]; nextCursor: string | null }>(`/orders/by-shift?${params}`, token);
+}
+
 export async function apiListAuditLogs(query: string, token?: string) {
   return apiGet(`/audit/logs?${query}`, token);
 }
@@ -246,6 +268,7 @@ export async function apiAmendOrder(
     customerAddress?: string;
     captainName?: string;
     note?: string;
+    discountAmount?: number;
     items?: Array<{ productId: string; quantity: number; unitPrice: number; note?: string }>;
   },
   token?: string,
@@ -303,7 +326,17 @@ export async function apiListSuspendedOrders(branchId: string, token?: string) {
   return apiGet(`/orders/suspended?branchId=${branchId}`, token);
 }
 
-export async function apiCreateCashierExpense(dto: { branchId: string; shiftId?: string; kind: 'ITEM' | 'GENERAL'; stockItemId?: string; quantity?: number; unitPrice?: number; amount?: number; note?: string }, token?: string) {
+export async function apiCreateCashierExpense(dto: {
+  branchId: string;
+  shiftId?: string;
+  kind: 'ITEM' | 'GENERAL';
+  stockItemId?: string;
+  quantity?: number;
+  unitPrice?: number;
+  amount?: number;
+  note?: string;
+  paymentMethod?: 'CASH' | 'INSTAPAY' | 'WALLET' | 'CARD';
+}, token?: string) {
   return apiPost('/cashier-expenses', dto, token);
 }
 
@@ -312,6 +345,30 @@ export async function apiListExpenseStockItems(branchId: string, token?: string)
     `/cashier-expenses/stock-items?branchId=${branchId}`,
     token,
   );
+}
+
+export async function apiGetProductionPlan(branchId: string, date?: string, token?: string) {
+  const params = new URLSearchParams({ branchId });
+  if (date) params.set('date', date);
+  return apiGet<{
+    dateKey: string;
+    items: Array<{
+      productId: string;
+      name: string;
+      categoryId: string;
+      categoryName: string;
+      plannedQuantity: number | null;
+      soldQuantity: number;
+    }>;
+  }>(`/production-plan?${params}`, token);
+}
+
+export async function apiSaveProductionPlan(dto: {
+  branchId: string;
+  dateKey?: string;
+  items: Array<{ productId: string; plannedQuantity?: number | null }>;
+}, token?: string) {
+  return apiPost('/production-plan', dto, token);
 }
 
 export async function apiListCashBoxes(branchId: string, token?: string) {

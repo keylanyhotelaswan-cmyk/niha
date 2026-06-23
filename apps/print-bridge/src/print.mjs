@@ -52,8 +52,11 @@ export async function resolvePrinterName(requested) {
   const byBase = printers.find((p) => p.toLowerCase().startsWith(base) || base.startsWith(p.toLowerCase()));
   if (byBase) return byBase;
 
-  const xp = printers.find((p) => /xp-?80/i.test(p));
-  if (xp && /xp-?80/i.test(name)) return xp;
+  const xp = printers.find((p) => /xp-?k?200/i.test(p));
+  if (xp && /xp-?k?200/i.test(name)) return xp;
+
+  const xp80 = printers.find((p) => /xp-?80/i.test(p));
+  if (xp80 && /xp-?80/i.test(name)) return xp80;
 
   const sample = printers.slice(0, 4).join('، ');
   throw new Error(`الطابعة «${name}» غير موجودة على هذا الجهاز. المتاح: ${sample}`);

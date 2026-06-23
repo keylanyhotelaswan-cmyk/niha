@@ -2,6 +2,7 @@ import { Controller, Post, Body, UseGuards, Request, Get, Query, BadRequestExcep
 import { ShiftsService } from './shifts.service.js';
 import { OpenShiftDto } from './dto/open-shift.dto.js';
 import { CloseShiftDto } from './dto/close-shift.dto.js';
+import { ShiftWalletTransferDto } from './dto/shift-wallet-transfer.dto.js';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { PermissionsGuard } from '../auth/guards/permissions.guard.js';
 import { RequirePermissions } from '../auth/decorators/permissions.decorator.js';
@@ -47,6 +48,12 @@ export class ShiftsController {
     return this.shiftsService.getHandoffOptions(shiftId.trim());
   }
 
+  @Post('wallet-transfer')
+  @RequirePermissions('shifts.access', 'pos.use')
+  walletTransfer(@Body() dto: ShiftWalletTransferDto, @Request() req: any) {
+    return this.shiftsService.transferShiftWallet(dto, req.user?.id);
+  }
+
   @Get('pos-context')
   @RequirePermissions('pos.use')
   posContext(@Request() req: any) {
@@ -66,7 +73,7 @@ export class ShiftsController {
   @Get('pos-summary')
   @RequirePermissions('pos.use')
   posSummary(@Query('shiftId') shiftId: string) {
-    return this.shiftsService.getPosShiftSummary(shiftId);
+    return this.shiftsService.getPosShiftSummary(shiftId, { includeOrders: false });
   }
 
   @Get('current')

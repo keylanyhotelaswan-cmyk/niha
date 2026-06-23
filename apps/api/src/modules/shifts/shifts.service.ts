@@ -1,11 +1,25 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { PaymentMethodType, Prisma } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SequenceService } from '../sequence/sequence.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
+import { ProductionPlanService } from '../production-plan/production-plan.service.js';
 import { OpenShiftDto } from './dto/open-shift.dto.js';
 import { CloseShiftDto } from './dto/close-shift.dto.js';
+import { ShiftWalletTransferDto } from './dto/shift-wallet-transfer.dto.js';
 import { splitPosCatalogProducts } from './pos-catalog-sauces.js';
+import {
+  aggregateExpensesByPaymentMethod,
+  aggregateShiftWalletTransfers,
+  netCollectionByMethod,
+} from './shift-collection-net.js';
+
+const SHIFT_WALLET_METHOD_LABELS: Record<string, string> = {
+  CASH: 'نقدي',
+  INSTAPAY: 'انستاباي',
+  WALLET: 'محفظة',
+};
 
 @Injectable()
 export class ShiftsService {
@@ -13,6 +27,7 @@ export class ShiftsService {
     private prisma: PrismaService,
     private sequenceService: SequenceService,
     private treasuryService: TreasuryService,
+    private productionPlanService: ProductionPlanService,
   ) {}
 
   async autoOpenShift(openDto: OpenShiftDto, userId: string) {
@@ -70,13 +85,31 @@ export class ShiftsService {
     });
 
     if (openShift) {
+      const posSummary = await this.getPosShiftSummary(openShift.id, { includeOrders: false });
       return {
         branch: { id: branch.id, name: branch.name },
         cashBox: { id: openShift.cashBox.id, name: openShift.cashBox.name },
         shiftOpen: true,
         shift: openShift,
-        summary: null,
-        posSummary: null,
+        summary: {
+          openingFloat: posSummary.openingFloat,
+          incoming: posSummary.incoming,
+          outgoing: posSummary.outgoing,
+          pending: posSummary.pendingCashInCustody,
+          pendingCashInCustody: posSummary.pendingCashInCustody,
+          expectedCash: posSummary.expectedCash,
+          totalSales: posSummary.salesTotal,
+          byPaymentMethod: posSummary.byPaymentMethod,
+          salesByMethod: posSummary.salesByMethod,
+          expensesTotal: posSummary.expensesTotal,
+          expensesByPaymentMethod: posSummary.expensesByPaymentMethod,
+          netSalesByMethod: posSummary.netSalesByMethod,
+          walletTransfers: posSummary.walletTransfers,
+          ordersCount: posSummary.ordersCount,
+          uncollectedCount: posSummary.uncollectedCount,
+          uncollectedTotal: posSummary.uncollectedTotal,
+        },
+        posSummary,
       };
     }
 
@@ -729,7 +762,7 @@ export class ShiftsService {
   async getPosShiftSummary(shiftId: string, opts?: { includeOrders?: boolean }) {
     const includeOrders = opts?.includeOrders !== false;
 
-    const [shift, treasurySummary, expenses] = await Promise.all([
+    const [shift, treasurySummary, expenses, walletTransferTxs] = await Promise.all([
       this.prisma.shift.findUnique({
         where: { id: shiftId },
         include: { openedBy: true, cashBox: true },
@@ -739,6 +772,13 @@ export class ShiftsService {
         where: { shiftId },
         orderBy: { createdAt: 'desc' },
       }),
+      this.prisma.treasuryTransaction.findMany({
+        where: {
+          shiftId,
+          sourceType: { in: ['SHIFT_WALLET_TRANSFER_OUT', 'SHIFT_WALLET_TRANSFER_IN'] },
+        },
+        select: { amount: true, paymentMethod: true, sourceType: true },
+      }),
     ]);
     if (!shift) {
       throw new NotFoundException('Shift not found');
@@ -747,6 +787,13 @@ export class ShiftsService {
     const expensesTotal = expenses.reduce((s, e) => s + Number(e.amount), 0);
     const expensesGeneral = expenses.filter((e) => e.kind === 'GENERAL').reduce((s, e) => s + Number(e.amount), 0);
     const expensesItems = expenses.filter((e) => e.kind === 'ITEM').reduce((s, e) => s + Number(e.amount), 0);
+    const expensesByPaymentMethod = aggregateExpensesByPaymentMethod(expenses);
+    const walletTransfers = aggregateShiftWalletTransfers(walletTransferTxs);
+    const netSalesByMethod = netCollectionByMethod(
+      treasurySummary.salesByMethod,
+      expensesByPaymentMethod,
+      walletTransfers,
+    );
 
     let collectedApproved = 0;
     let collectedPending = 0;
@@ -773,6 +820,9 @@ export class ShiftsService {
       outgoing: treasurySummary.outgoing,
       byPaymentMethod: treasurySummary.byPaymentMethod,
       salesByMethod: treasurySummary.salesByMethod,
+      expensesByPaymentMethod,
+      walletTransfers,
+      netSalesByMethod,
     };
 
     if (!includeOrders) {
@@ -913,8 +963,117 @@ export class ShiftsService {
     };
   }
 
+  async transferShiftWallet(dto: ShiftWalletTransferDto, userId: string) {
+    if (dto.fromPaymentMethod === dto.toPaymentMethod) {
+      throw new BadRequestException('اختر حسابين مختلفين للتحويل');
+    }
+
+    const shift = await this.prisma.shift.findUnique({
+      where: { id: dto.shiftId },
+      include: { cashBox: true },
+    });
+    if (!shift) {
+      throw new NotFoundException('الوردية غير موجودة');
+    }
+    if (shift.status !== 'OPEN') {
+      throw new BadRequestException('لا يمكن التحويل إلا في وردية مفتوحة');
+    }
+
+    const perms = await this.treasuryService.resolveWorkspacePermissions(userId);
+    if (perms.openedByIdFilter && shift.openedById !== userId) {
+      throw new BadRequestException('لا يمكنك التحويل من وردية مستخدم آخر');
+    }
+
+    const amount = Number(Number(dto.amount).toFixed(2));
+    if (amount <= 0) {
+      throw new BadRequestException('المبلغ يجب أن يكون أكبر من صفر');
+    }
+
+    const [treasurySummary, expenses, walletTransferTxs] = await Promise.all([
+      this.treasuryService.getShiftSummary(dto.shiftId),
+      this.prisma.cashierExpense.findMany({
+        where: { shiftId: dto.shiftId },
+        select: { amount: true, paymentMethod: true },
+      }),
+      this.prisma.treasuryTransaction.findMany({
+        where: {
+          shiftId: dto.shiftId,
+          sourceType: { in: ['SHIFT_WALLET_TRANSFER_OUT', 'SHIFT_WALLET_TRANSFER_IN'] },
+        },
+        select: { amount: true, paymentMethod: true, sourceType: true },
+      }),
+    ]);
+
+    const expensesByPaymentMethod = aggregateExpensesByPaymentMethod(expenses);
+    const walletTransfers = aggregateShiftWalletTransfers(walletTransferTxs);
+    const net = netCollectionByMethod(
+      treasurySummary.salesByMethod,
+      expensesByPaymentMethod,
+      walletTransfers,
+    );
+    const available = net[dto.fromPaymentMethod]?.total ?? 0;
+    if (amount > available + 0.001) {
+      const label = SHIFT_WALLET_METHOD_LABELS[dto.fromPaymentMethod] ?? dto.fromPaymentMethod;
+      throw new BadRequestException(
+        `رصيد ${label} غير كافٍ (متاح ${available.toFixed(2)} ج.م)`,
+      );
+    }
+
+    const transferId = randomUUID();
+    const baseNote = dto.note?.trim() || `تحويل ${dto.fromPaymentMethod} → ${dto.toPaymentMethod}`;
+    const fromMethod = dto.fromPaymentMethod as PaymentMethodType;
+    const toMethod = dto.toPaymentMethod as PaymentMethodType;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.treasuryTransaction.create({
+        data: {
+          branchId: shift.branchId,
+          cashBoxId: shift.cashBoxId,
+          shiftId: shift.id,
+          safeType: 'EXPENSES',
+          transactionType: 'CASH_WITHDRAWAL',
+          paymentMethod: fromMethod,
+          amount,
+          sourceType: 'SHIFT_WALLET_TRANSFER_OUT',
+          sourceId: transferId,
+          note: `${baseNote} — خروج`,
+          approvalStatus: 'APPROVED',
+          collectionStatus: 'APPROVED',
+          affectsCash: fromMethod === 'CASH',
+          occurredAt: new Date(),
+        },
+      });
+      await tx.treasuryTransaction.create({
+        data: {
+          branchId: shift.branchId,
+          cashBoxId: shift.cashBoxId,
+          shiftId: shift.id,
+          safeType: 'EXPENSES',
+          transactionType: 'CASH_DEPOSIT',
+          paymentMethod: toMethod,
+          amount,
+          sourceType: 'SHIFT_WALLET_TRANSFER_IN',
+          sourceId: transferId,
+          note: `${baseNote} — دخول`,
+          approvalStatus: 'APPROVED',
+          collectionStatus: 'APPROVED',
+          affectsCash: toMethod === 'CASH',
+          occurredAt: new Date(),
+        },
+      });
+    });
+
+    return {
+      transferId,
+      fromPaymentMethod: dto.fromPaymentMethod,
+      toPaymentMethod: dto.toPaymentMethod,
+      amount,
+      note: baseNote,
+    };
+  }
+
   async getPosCatalog(branchId: string) {
-    const [categories, products, paymentMethods] = await Promise.all([
+    const [categories, products, paymentMethods, dailyPlanMap] = await Promise.all([
       this.prisma.productCategory.findMany({
         where: { branchId },
         orderBy: { name: 'asc' },
@@ -927,6 +1086,7 @@ export class ShiftsService {
         where: { branchId, isActive: true },
         orderBy: { sortOrder: 'asc' },
       }),
+      this.productionPlanService.getSummaryMap(branchId),
     ]);
 
     const mappedProducts = products.map((product) => ({
@@ -942,10 +1102,14 @@ export class ShiftsService {
     }));
 
     const { menuProducts, sauces } = splitPosCatalogProducts(mappedProducts, categories);
+    const productsWithPlan = menuProducts.map((product) => {
+      const plan = dailyPlanMap.get(product.id);
+      return plan ? { ...product, dailyPlan: plan } : product;
+    });
 
     return {
       categories,
-      products: menuProducts,
+      products: productsWithPlan,
       sauces,
       paymentMethods,
     };

@@ -34,6 +34,7 @@ export function usePosCatalog(branchId: string, accessToken: string | null) {
     salePrice: number;
     sku?: string | null;
     isAvailable?: boolean;
+    dailyPlan?: { planned: number; sold: number };
   };
 
   const products = (data?.products ?? []) as PosCatalogProduct[];

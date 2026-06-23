@@ -2,6 +2,7 @@ import { Injectable, BadRequestException, NotFoundException } from '@nestjs/comm
 import { PaymentMethodType, Prisma, SafeType, TreasuryTransactionType } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { aggregateExpensesByPaymentMethod, aggregateShiftWalletTransfers, netCollectionByMethod } from '../shifts/shift-collection-net.js';
 import { TransferDto } from './dto/transfer.dto.js';
 import { CreateMovementDto } from './dto/create-movement.dto.js';
 
@@ -937,6 +938,9 @@ export class TreasuryService {
             byPaymentMethod: summary.byPaymentMethod,
             salesByMethod: summary.salesByMethod,
             expensesTotal: summary.expensesTotal,
+            expensesByPaymentMethod: summary.expensesByPaymentMethod,
+            netSalesByMethod: summary.netSalesByMethod,
+            walletTransfers: summary.walletTransfers,
             ordersCount: summary.ordersCount,
             transactionCount: summary.transactionCount,
             uncollectedCount: summary.uncollectedCount,
@@ -1247,7 +1251,7 @@ export class TreasuryService {
       OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
     };
 
-    const [allTxRows, recentTransactionsRaw, expenseAgg, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
+    const [allTxRows, recentTransactionsRaw, expenseRows, walletTransferTxs, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
       this.prisma.treasuryTransaction.findMany({
         where: { shiftId },
         select: txSelect,
@@ -1270,9 +1274,16 @@ export class TreasuryService {
         orderBy: { occurredAt: 'desc' },
         take: 200,
       }),
-      this.prisma.cashierExpense.aggregate({
+      this.prisma.cashierExpense.findMany({
         where: { shiftId },
-        _sum: { amount: true },
+        select: { amount: true, paymentMethod: true },
+      }),
+      this.prisma.treasuryTransaction.findMany({
+        where: {
+          shiftId,
+          sourceType: { in: ['SHIFT_WALLET_TRANSFER_OUT', 'SHIFT_WALLET_TRANSFER_IN'] },
+        },
+        select: { amount: true, paymentMethod: true, sourceType: true },
       }),
       this.prisma.order.aggregate({
         where: { shiftId, status: 'CLOSED' },
@@ -1313,6 +1324,10 @@ export class TreasuryService {
     }));
 
     const totals = this.computeShiftTotals(Number(shift.openingFloat), allTxRows);
+    const expensesTotal = expenseRows.reduce((s, e) => s + Number(e.amount), 0);
+    const expensesByPaymentMethod = aggregateExpensesByPaymentMethod(expenseRows);
+    const walletTransfers = aggregateShiftWalletTransfers(walletTransferTxs);
+    const netSalesByMethod = netCollectionByMethod(totals.salesByMethod, expensesByPaymentMethod, walletTransfers);
     const uncollectedOrders = uncollectedOrdersRaw.map((o) => ({
       orderNumber: o.orderNumber,
       total: Number(o.totalAmount),
@@ -1323,7 +1338,10 @@ export class TreasuryService {
       transactions: recentTransactions,
       transactionCount: allTxRows.length,
       ordersCount: closedOrdersAgg._count,
-      expensesTotal: Number(expenseAgg._sum.amount ?? 0),
+      expensesTotal,
+      expensesByPaymentMethod,
+      walletTransfers,
+      netSalesByMethod,
       uncollectedCount: uncollectedAgg._count,
       uncollectedTotal: Number(uncollectedAgg._sum.totalAmount ?? 0),
       uncollectedOrders,

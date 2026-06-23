@@ -1,19 +1,21 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
-import { apiAutoOpenShift, apiCollectClosedOrder, apiCreateCashierExpense, apiListExpenseStockItems } from '../../lib/api.js';
+import { apiAutoOpenShift, apiCollectClosedOrder, apiCreateCashierExpense, apiListExpenseStockItems, apiShiftWalletTransfer } from '../../lib/api.js';
 import { apiGet } from '../../lib/api-client.js';
 import { useAuth } from '../../lib/auth-context.js';
 import {
   invalidatePosQueries,
   patchPosCachesAfterAutoOpen,
   patchShiftOrderCollected,
+  patchShiftOrderUncollected,
   refetchPosOrderData,
   useBranches,
   useCashBoxes,
   useCurrentShift,
   usePosContext,
   usePosShiftSummary,
-  useShiftClosedOrders,
+  useShiftCollectedOrders,
+  useShiftUncollectedOrders,
   useShiftMutations,
   useSuspendedOrders,
 } from '../../lib/hooks.js';
@@ -50,7 +52,7 @@ export function usePosWorkspace() {
   const { data: shiftData, refetch: refetchShift } = useCurrentShift(
     effectiveBranchId,
     queryCashBoxId,
-    !posContextPending && !hasContextShift,
+    !posContextPending && !!effectiveBranchId && !!queryCashBoxId && (!hasContextShift || !posContext?.summary),
   );
 
   const shift = useMemo(() => {
@@ -81,16 +83,36 @@ export function usePosWorkspace() {
         ordersCount: treasurySummary.ordersCount,
         byPaymentMethod: treasurySummary.byPaymentMethod,
         salesByMethod: treasurySummary.salesByMethod,
+        expensesByPaymentMethod: treasurySummary.expensesByPaymentMethod,
+        walletTransfers: treasurySummary.walletTransfers,
+        netSalesByMethod: treasurySummary.netSalesByMethod,
         outgoing: treasurySummary.outgoing,
       }
     : null);
+  const displayPosSummary = posSummary ?? closeShiftSummary;
 
   const {
-    data: shiftOrdersRaw = [],
-    isPending: shiftOrdersPending,
-    isError: shiftOrdersError,
-    refetch: refetchShiftOrders,
-  } = useShiftClosedOrders(effectiveShiftId);
+    data: uncollectedPage,
+    isPending: uncollectedPending,
+    isError: uncollectedError,
+    refetch: refetchUncollected,
+  } = useShiftUncollectedOrders(effectiveShiftId);
+
+  const {
+    data: collectedPages,
+    isPending: collectedPending,
+    isError: collectedError,
+    refetch: refetchCollected,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  } = useShiftCollectedOrders(effectiveShiftId);
+
+  const shiftOrdersPending = uncollectedPending && collectedPending;
+  const shiftOrdersError = uncollectedError || collectedError;
+  const refetchShiftOrders = async () => {
+    await Promise.all([refetchUncollected(), refetchCollected()]);
+  };
 
   const { data: apiSuspended = [], isPending: suspendedPending, refetch: refetchSuspended } = useSuspendedOrders(effectiveBranchId);
 
@@ -139,10 +161,14 @@ export function usePosWorkspace() {
   );
 
   const shiftClosedOrdersSource = useMemo(() => {
-    if (shiftOrdersRaw.length > 0) return shiftOrdersRaw;
+    const uncollected = uncollectedPage?.orders ?? [];
+    const collected = collectedPages?.pages.flatMap((p) => p.orders) ?? [];
+    if (uncollected.length > 0 || collected.length > 0) {
+      return [...uncollected, ...collected];
+    }
     const fromSummary = posSummary?.shiftClosedOrders ?? posContext?.posSummary?.shiftClosedOrders;
-    return fromSummary ?? shiftOrdersRaw;
-  }, [shiftOrdersRaw, posSummary, posContext]);
+    return fromSummary ?? [];
+  }, [uncollectedPage, collectedPages, posSummary, posContext]);
 
   const shiftClosedOrders = useMemo<SavedOrder[]>(() => {
     const seen = new Set<string>();
@@ -299,22 +325,36 @@ export function usePosWorkspace() {
     }
   };
 
-  const collectOrder = async (order: SavedOrder, paymentMethodId: string) => {
+  const collectOrder = (
+    order: SavedOrder,
+    paymentMethodId: string,
+    onError?: (message: string) => void,
+  ): { ok: true } | { ok: false; error: string } => {
     if (!accessToken) return { ok: false, error: 'غير مسجل' };
-    const shiftId = order.id && effectiveShiftId ? effectiveShiftId : shift?.id;
+    const shiftId = effectiveShiftId ?? shift?.id;
     if (shiftId) {
       patchShiftOrderCollected(queryClient, shiftId, order.id);
     }
-    const res = await apiCollectClosedOrder(order.id, {
-      paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
-      amount: order.total,
-    }, accessToken);
-    if (res.ok) {
-      void refetchPosOrderData(queryClient, shiftId ?? effectiveShiftId);
-    } else if (shiftId) {
-      void queryClient.invalidateQueries({ queryKey: ['orders-shift-closed', shiftId] });
-    }
-    return res;
+
+    void (async () => {
+      const res = await apiCollectClosedOrder(order.id, {
+        paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
+        amount: order.total,
+      }, accessToken);
+      if (res.ok) {
+        void refetchPosOrderData(queryClient, shiftId);
+        return;
+      }
+      const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
+      if (shiftId) {
+        patchShiftOrderUncollected(queryClient, shiftId, order.id);
+        void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
+        void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
+      }
+      onError?.(message);
+    })();
+
+    return { ok: true };
   };
 
   const createExpense = async (dto: {
@@ -324,12 +364,14 @@ export function usePosWorkspace() {
     quantity?: number;
     unitPrice?: number;
     note?: string;
+    paymentMethod?: 'CASH' | 'INSTAPAY' | 'WALLET' | 'CARD';
   }) => {
     if (!accessToken || !shift?.id) return { ok: false, error: 'الوردية مغلقة' };
     const res = await apiCreateCashierExpense({
       branchId: effectiveBranchId,
       shiftId: shift.id,
       kind: dto.kind,
+      paymentMethod: dto.paymentMethod ?? 'CASH',
       ...(dto.kind === 'ITEM'
         ? {
             ...(dto.stockItemId ? { stockItemId: dto.stockItemId } : {}),
@@ -337,6 +379,26 @@ export function usePosWorkspace() {
             ...(dto.unitPrice != null ? { unitPrice: dto.unitPrice } : {}),
           }
         : { ...(dto.amount != null ? { amount: dto.amount } : {}) }),
+      ...(dto.note ? { note: dto.note } : {}),
+    }, accessToken);
+    if (res.ok) {
+      void refreshAfterOrder();
+    }
+    return res;
+  };
+
+  const transferWallet = async (dto: {
+    fromPaymentMethod: 'CASH' | 'INSTAPAY' | 'WALLET';
+    toPaymentMethod: 'CASH' | 'INSTAPAY' | 'WALLET';
+    amount: number;
+    note?: string;
+  }) => {
+    if (!accessToken || !shift?.id) return { ok: false, error: 'الوردية مغلقة' };
+    const res = await apiShiftWalletTransfer({
+      shiftId: shift.id,
+      fromPaymentMethod: dto.fromPaymentMethod,
+      toPaymentMethod: dto.toPaymentMethod,
+      amount: dto.amount,
       ...(dto.note ? { note: dto.note } : {}),
     }, accessToken);
     if (res.ok) {
@@ -365,6 +427,7 @@ export function usePosWorkspace() {
     effectiveShiftId,
     cashBoxId,
     posSummary,
+    displayPosSummary,
     closeShiftSummary,
     posSummaryPending,
     posSummaryError,
@@ -387,7 +450,13 @@ export function usePosWorkspace() {
     closeShiftSession,
     collectOrder,
     createExpense,
+    transferWallet,
     refetchShiftOrders,
+    refetchUncollected,
+    refetchCollected,
+    fetchNextCollectedPage: fetchNextPage,
+    hasMoreCollected: hasNextPage,
+    collectedLoadingMore: isFetchingNextPage,
     refetchPosContext,
     refetchSuspended,
   };

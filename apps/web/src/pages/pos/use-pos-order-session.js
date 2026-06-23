@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { apiCreateOpenOrder, apiPlaceOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
-import { invalidatePosQueries } from '../../lib/hooks.js';
-import { isAutoPrintEnabled, printPosReceipt, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
+import { apiCreateOpenOrder, apiPlaceOrder, apiAmendOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
+import { invalidatePosQueries, patchShiftOrderAdded, refetchPosOrderData } from '../../lib/hooks.js';
+import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
+import { isAutoPrintEnabled, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
 import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, } from '../../lib/pos-store.js';
 import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
+import { planQuantityChangeAlert, planSoldAdjustment } from './production-plan-utils.js';
 export function usePosOrderSession(workspace, catalog) {
     const queryClient = useQueryClient();
     const { accessToken, effectiveBranchId, shift, shiftOpen, cashBoxId, shiftOperatorName, refreshAfterOrder, refetchSuspended, } = workspace;
@@ -24,6 +26,9 @@ export function usePosOrderSession(workspace, catalog) {
     const [collectionStatus, setCollectionStatus] = useState('approved');
     const [cartItems, setCartItems] = useState([]);
     const [openOrderId, setOpenOrderId] = useState(null);
+    const [editMode, setEditMode] = useState(false);
+    const [editingOrderId, setEditingOrderId] = useState(null);
+    const [editBaselineQty, setEditBaselineQty] = useState(() => new Map());
     const [autoPrint, setAutoPrint] = useState(() => isAutoPrintEnabled());
     const pendingRef = useRef({ openOrderId: null, cartItems: [], accessToken: null });
     useEffect(() => {
@@ -55,6 +60,7 @@ export function usePosOrderSession(workspace, catalog) {
         setCaptainName('');
         setCartItems([]);
         setOpenOrderId(null);
+        setEditBaselineQty(new Map());
     };
     const toggleItemSauce = (productId, sauceName) => {
         setCartItems((cur) => cur.map((i) => {
@@ -79,6 +85,8 @@ export function usePosOrderSession(workspace, catalog) {
     const openNewOrder = () => {
         if (!ensureShift())
             return false;
+        setEditMode(false);
+        setEditingOrderId(null);
         resetOrder('eat-in');
         setProductSearch('');
         catalog.setActiveCategory(ALL_CATEGORIES);
@@ -86,6 +94,13 @@ export function usePosOrderSession(workspace, catalog) {
         return true;
     };
     const closeModal = async () => {
+        if (editMode) {
+            setEditMode(false);
+            setEditingOrderId(null);
+            setModalOpen(false);
+            resetOrder();
+            return;
+        }
         if (openOrderId && cartItems.length > 0 && accessToken) {
             const res = await apiSuspendOrder(openOrderId, 'إعادة تعليق تلقائي', accessToken);
             if (res.ok) {
@@ -112,18 +127,34 @@ export function usePosOrderSession(workspace, catalog) {
         if (customer.address?.trim())
             setCustomerAddress(customer.address.trim());
     };
+    const notifyPlanChange = (product, prevQty, nextQty) => {
+        const plan = product.dailyPlan ?? catalog.getProductDailyPlan?.(product.id);
+        if (!plan)
+            return;
+        const adj = planSoldAdjustment(editMode, editBaselineQty.get(product.id) ?? 0);
+        const msg = planQuantityChangeAlert(product.name, plan, prevQty, nextQty, adj);
+        if (msg)
+            catalog.onNotify?.(msg);
+    };
     const addProduct = (product) => {
         if (!product.isAvailable)
             return;
         setCartItems((cur) => {
+            const prevQty = cur.find((i) => i.productId === product.id)?.quantity ?? 0;
+            const nextQty = prevQty + 1;
+            notifyPlanChange(product, prevQty, nextQty);
             const ex = cur.find((i) => i.productId === product.id);
             if (ex)
                 return cur.map((i) => i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i);
             return [...cur, { productId: product.id, name: product.name, unitPrice: product.salePrice, quantity: 1, note: '', sauces: [] }];
         });
     };
-    const updateQuantity = (productId, qty) => {
+    const updateQuantity = (productId, qty, productMeta) => {
         setCartItems((cur) => {
+            const prevQty = cur.find((i) => i.productId === productId)?.quantity ?? 0;
+            if (productMeta && qty > 0 && qty !== prevQty) {
+                notifyPlanChange({ id: productId, ...productMeta }, prevQty, qty);
+            }
             if (qty <= 0)
                 return cur.filter((i) => i.productId !== productId);
             return cur.map((i) => i.productId === productId ? { ...i, quantity: qty } : i);
@@ -255,21 +286,86 @@ export function usePosOrderSession(workspace, catalog) {
             }, accessToken);
             if (!res.ok) {
                 catalog.onNotify?.(res.body ?? res.error ?? 'فشل إغلاق الطلب');
-                void refreshAfterOrder(shiftIdForRefresh);
+                void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftIdForRefresh] });
+                void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftIdForRefresh] });
+                void refetchPosOrderData(queryClient, shiftIdForRefresh);
                 return;
             }
             const apiOrder = res.data;
             const orderCode = apiOrder?.orderNumber ?? orderCodeSnapshot;
             catalog.onNotify?.(`تم إغلاق ${orderCode} — ${statusNote}`);
-            if (printPayload) {
-                const printRes = await printPosReceipt({ ...printPayload, orderNumber: orderCode }, { force: true, silent: true, copies: 'both' });
-                if (!printRes.ok && !printRes.skipped) {
-                    catalog.onNotify?.(`تم إغلاق ${orderCode} — فشل الطباعة: ${printRes.message}`);
-                }
+            if (shiftIdForRefresh && apiOrder?.id) {
+                patchShiftOrderAdded(queryClient, shiftIdForRefresh, apiOrder);
             }
-            void refreshAfterOrder(shiftIdForRefresh);
+            void refetchPosOrderData(queryClient, shiftIdForRefresh);
+            if (printPayload) {
+                void enqueuePosPrint({ ...printPayload, orderNumber: orderCode }, { force: true, silent: true, copies: 'both' }, (printRes) => {
+                    if (!printRes.ok && !printRes.skipped) {
+                        catalog.onNotify?.(`تم إغلاق ${orderCode} — فشل الطباعة: ${printRes.message}`);
+                    }
+                });
+            }
         })();
         return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
+    };
+    const openEditOrder = (order) => {
+        if (!ensureShift())
+            return false;
+        setEditMode(true);
+        setEditingOrderId(order.id);
+        setEditBaselineQty(new Map(order.items.map((i) => [i.productId, i.quantity])));
+        setCurrentOrderCode(order.code);
+        setOrderType(order.orderType);
+        setPaymentMethod(order.paymentMethod);
+        setDiscountAmount(order.discountAmount);
+        setOrderNote(order.orderNote);
+        setOrderOwnerName(order.ownerName && order.ownerName !== defaultOwnerName(order.orderType) ? order.ownerName : '');
+        setCustomerPhone(order.customerPhone ?? '');
+        setCustomerAddress(order.customerAddress ?? '');
+        setCaptainName(order.captainName ?? '');
+        setCollectionStatus(order.collectionStatus);
+        setCartItems(order.items.map((i) => ({ ...i, sauces: i.sauces ?? [] })));
+        setOpenOrderId(null);
+        setProductSearch('');
+        catalog.setActiveCategory(ALL_CATEGORIES);
+        setModalOpen(true);
+        return true;
+    };
+    const saveEditedOrder = async () => {
+        if (!editMode || !editingOrderId || !accessToken)
+            return { ok: false, error: 'غير مسجل' };
+        if (cartItems.length === 0)
+            return { ok: false, error: 'أضف صنفاً واحداً على الأقل' };
+        const takeawayCheck = validateTakeawayCustomer();
+        if (!takeawayCheck.ok)
+            return takeawayCheck;
+        const res = await apiAmendOrder(editingOrderId, {
+            customerName: orderOwnerName.trim() || defaultOwnerName(orderType),
+            customerPhone: customerPhone.trim(),
+            customerAddress: customerAddress.trim(),
+            captainName: captainName.trim(),
+            note: orderNote.trim(),
+            discountAmount: Number(discountAmount) || 0,
+            items: cartItems.map((item) => {
+                const note = itemNoteForApi(item);
+                return {
+                    productId: item.productId,
+                    quantity: item.quantity,
+                    unitPrice: item.unitPrice,
+                    ...(note ? { note } : {}),
+                };
+            }),
+        }, accessToken);
+        if (res.ok) {
+            setEditMode(false);
+            setEditingOrderId(null);
+            setModalOpen(false);
+            resetOrder();
+            void refreshAfterOrder();
+        }
+        return res.ok
+            ? { ok: true }
+            : { ok: false, error: res.body ?? res.error ?? 'فشل حفظ التعديل' };
     };
     const resumeSuspended = async (order) => {
         if (!accessToken || !ensureShift())
@@ -277,6 +373,8 @@ export function usePosOrderSession(workspace, catalog) {
         const res = await apiResumeOrder(order.id, accessToken);
         if (!res.ok)
             return res;
+        setEditMode(false);
+        setEditingOrderId(null);
         setCurrentOrderCode(order.code);
         setOrderType(order.orderType);
         setPaymentMethod(order.paymentMethod);
@@ -333,10 +431,14 @@ export function usePosOrderSession(workspace, catalog) {
         updateQuantity,
         updateNote,
         openNewOrder,
+        openEditOrder,
         closeModal,
         suspendOrder,
         closeOrder,
+        saveEditedOrder,
         resumeSuspended,
         resetOrder,
+        editMode,
+        editBaselineQty,
     };
 }

@@ -25,6 +25,44 @@ export async function listBridgePrinters() {
         return [];
     }
 }
+export async function bridgePrintEscPos(jobs, settings) {
+    const printer = readSavedPrinterName() || DEFAULT_PRINTER_NAME;
+    if (!jobs.length) {
+        return { ok: false, reason: 'print-failed', message: 'لا توجد مهام طباعة' };
+    }
+    const online = await isPrintBridgeOnline();
+    if (!online) {
+        return {
+            ok: false,
+            reason: 'bridge-offline',
+            message: 'Niha Print Bridge غير شغّال — شغّله من: npm run dev:print-bridge',
+        };
+    }
+    try {
+        const res = await fetch(`${PRINT_BRIDGE_URL}/print/escpos`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ printer, jobs, settings: settings ?? {} }),
+            signal: AbortSignal.timeout(30000),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+            return {
+                ok: false,
+                reason: 'print-failed',
+                message: data.message ?? `فشل الطباعة ESC/POS على «${printer}»`,
+            };
+        }
+        return { ok: true, printer: data.printer ?? printer, count: data.count ?? jobs.length, mode: 'escpos' };
+    }
+    catch (err) {
+        return {
+            ok: false,
+            reason: 'print-failed',
+            message: err instanceof Error ? err.message : `فشل الطباعة ESC/POS على «${printer}»`,
+        };
+    }
+}
 export async function bridgePrintJobs(jobs) {
     const printer = readSavedPrinterName() || DEFAULT_PRINTER_NAME;
     const defaults = getReceiptSettings();

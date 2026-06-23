@@ -201,6 +201,7 @@ model Branch {
   paymentMethods    PaymentMethod[]
   productCategories ProductCategory[]
   products          Product[]
+  productDailyPlans ProductDailyPlan[]
   purchaseOrders    PurchaseOrder[]
   recipes           Recipe[]
   sequences         Sequence[]
@@ -244,6 +245,7 @@ model User {
   ordersCreated                   Order[]                   @relation("OrdersCreatedBy")
   organization                    Organization              @relation(fields: [organizationId], references: [id])
   productStatusEvents             ProductStatusEvent[]      @relation("ProductStatusChangedBy")
+  productDailyPlansUpdated        ProductDailyPlan[]        @relation("ProductDailyPlansUpdatedBy")
   purchaseOrdersCreated           PurchaseOrder[]           @relation("PurchaseOrdersCreatedBy")
   recipeVersionsCreated           RecipeVersion[]           @relation("RecipeVersionsCreatedBy")
   resumedSuspensions              SuspendedOrder[]          @relation("OrderResumedBy")
@@ -523,8 +525,27 @@ model Product {
   priceEntries  ProductPrice[]
   recipes       Recipe[]
   statusEvents  ProductStatusEvent[]
+  dailyPlans    ProductDailyPlan[]
 
   @@unique([branchId, sku])
+}
+
+model ProductDailyPlan {
+  id              String   @id @default(uuid())
+  branchId        String
+  productId       String
+  dateKey         String
+  plannedQuantity Int
+  note            String?
+  updatedById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  branch          Branch   @relation(fields: [branchId], references: [id])
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  updatedBy       User?    @relation("ProductDailyPlansUpdatedBy", fields: [updatedById], references: [id])
+
+  @@unique([branchId, productId, dateKey])
+  @@index([branchId, dateKey])
 }
 
 model ProductPrice {
@@ -618,6 +639,8 @@ model Order {
   @@index([branchId, orderNumber])
   @@index([branchId, openedAt])
   @@index([customerId])
+  @@index([shiftId, status, closedAt])
+  @@index([branchId, cashBoxId, status, closedAt])
 }
 
 model OrderItem {
@@ -787,6 +810,7 @@ model CashierExpense {
   quantity     Decimal? @db.Decimal(12, 3)
   unitPrice    Decimal? @db.Decimal(12, 2)
   amount       Decimal  @db.Decimal(12, 2)
+  paymentMethod PaymentMethodType @default(CASH)
   note         String?
   createdAt    DateTime @default(now())
 

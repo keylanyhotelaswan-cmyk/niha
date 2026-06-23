@@ -10,6 +10,7 @@ async function up() {
   const perms = [
     { code: 'users.manage', label: 'Manage users' },
     { code: 'pos.use', label: 'Use POS' },
+    { code: 'shifts.access', label: 'View open shift from POS' },
     { code: 'treasury.manage', label: 'Manage treasury' },
     { code: 'reports.view', label: 'View reports' },
     { code: 'inventory.manage', label: 'Manage inventory' },
@@ -50,7 +51,7 @@ async function up() {
   };
 
   await assign('manager', ['users.manage', 'pos.use', 'treasury.manage', 'reports.view', 'inventory.manage', 'setup_costs.manage']);
-  await assign('cashier', ['pos.use']);
+  await assign('cashier', ['pos.use', 'shifts.access']);
   await assign('accountant', ['reports.view', 'accounting.view']);
 
   // create users

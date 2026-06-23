@@ -8,7 +8,9 @@ type ShiftCollectionBreakdownProps = {
 
 export function ShiftCollectionBreakdown({ summary, compact }: ShiftCollectionBreakdownProps) {
   const rows = shiftCollectionRows(summary);
-  const visible = compact ? rows.filter((r) => r.total > 0) : rows;
+  const visible = compact
+    ? rows.filter((r) => r.total > 0 || r.method === 'CASH')
+    : rows;
 
   return (
     <Grid2 container spacing={1.5}>
@@ -34,10 +36,19 @@ export function ShiftCollectionBreakdown({ summary, compact }: ShiftCollectionBr
                 <Typography variant="caption" color="text.secondary">
                   معتمد {formatShiftMoney(row.approved)}
                   {row.pending > 0 ? ` · معلق ${formatShiftMoney(row.pending)}` : ''}
+                  {row.expense > 0 ? ` · مصروف ${formatShiftMoney(row.expense)}` : ''}
+                  {row.transferOut > 0 ? ` · تحويل خارج ${formatShiftMoney(row.transferOut)}` : ''}
+                  {row.transferIn > 0 ? ` · تحويل داخل ${formatShiftMoney(row.transferIn)}` : ''}
                 </Typography>
-              ) : row.pending > 0 ? (
-                <Typography variant="caption" color="warning.main">
-                  معلق {formatShiftMoney(row.pending)}
+              ) : row.pending > 0 || row.expense > 0 || row.transferOut > 0 || row.transferIn > 0 ? (
+                <Typography variant="caption" color={row.expense > 0 ? 'text.secondary' : 'warning.main'}>
+                  {row.pending > 0 ? `معلق ${formatShiftMoney(row.pending)}` : ''}
+                  {row.pending > 0 && (row.expense > 0 || row.transferOut > 0 || row.transferIn > 0) ? ' · ' : ''}
+                  {row.expense > 0 ? `مصروف ${formatShiftMoney(row.expense)}` : ''}
+                  {row.expense > 0 && (row.transferOut > 0 || row.transferIn > 0) ? ' · ' : ''}
+                  {row.transferOut > 0 ? `خارج ${formatShiftMoney(row.transferOut)}` : ''}
+                  {row.transferOut > 0 && row.transferIn > 0 ? ' · ' : ''}
+                  {row.transferIn > 0 ? `داخل ${formatShiftMoney(row.transferIn)}` : ''}
                 </Typography>
               ) : null}
             </Stack>

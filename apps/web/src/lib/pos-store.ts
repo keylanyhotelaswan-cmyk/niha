@@ -159,6 +159,7 @@ export function mapApiOrderToSavedOrder(
     closedAt?: string | Date | null;
     openedAt?: string | Date | null;
     createdBy?: { fullName?: string | null; username?: string | null } | null;
+    _count?: { items?: number };
     items?: Array<{
       productId: string;
       unitPrice: unknown;
@@ -179,7 +180,7 @@ export function mapApiOrderToSavedOrder(
     code: order.orderNumber,
     orderType,
     total: Number(order.totalAmount),
-    itemsCount: order.items?.length ?? 0,
+    itemsCount: order._count?.items ?? order.items?.length ?? 0,
     ownerName: order.customerName?.trim() ?? '',
     ...(order.customerPhone ? { customerPhone: order.customerPhone } : {}),
     ...(order.customerAddress ? { customerAddress: order.customerAddress } : {}),

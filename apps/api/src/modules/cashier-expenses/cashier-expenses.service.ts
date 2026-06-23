@@ -1,4 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { PaymentMethodType } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
 import { CreateCashierExpenseDto } from './dto/create-cashier-expense.dto.js';
@@ -51,6 +52,8 @@ export class CashierExpensesService {
 
     const expenseLabel = dto.kind === 'ITEM' ? 'مصروف خامة من الوردية' : 'مصروف عام من الوردية';
     const noteText = dto.note?.trim() ? `${expenseLabel}: ${dto.note.trim()}` : expenseLabel;
+    const paymentMethod = (dto.paymentMethod ?? 'CASH') as PaymentMethodType;
+    const affectsCash = paymentMethod === 'CASH';
 
     const expense = await this.prisma.$transaction(async (tx) => {
       const created = await tx.cashierExpense.create({
@@ -63,6 +66,7 @@ export class CashierExpensesService {
           quantity: dto.quantity ?? null,
           unitPrice: dto.unitPrice ?? null,
           amount,
+          paymentMethod,
           note: dto.note ?? null,
         },
       });
@@ -138,12 +142,12 @@ export class CashierExpensesService {
         safeType: 'EXPENSES',
         shiftId,
         transactionType: 'OPERATING_EXPENSE_PAYMENT',
-        paymentMethod: 'CASH',
+        paymentMethod,
         amount,
         sourceType: 'CASHIER_EXPENSE',
         sourceId: expense.id,
         note: noteText,
-        affectsCash: true,
+        affectsCash,
         approvalStatus: 'APPROVED',
         collectionStatus: 'APPROVED',
       });

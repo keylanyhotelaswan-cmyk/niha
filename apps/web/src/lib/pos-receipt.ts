@@ -1,6 +1,6 @@
 export const AUTO_PRINT_KEY = 'niha-pos-auto-print';
 export const PRINTER_NAME_KEY = 'niha-pos-printer-name';
-export const DEFAULT_PRINTER_NAME = 'XP-80C (copy 3)';
+export const DEFAULT_PRINTER_NAME = 'XP-K200L';
 
 export type ReceiptLine = {
   name: string;
@@ -205,7 +205,7 @@ export function buildReceiptFromSavedOrder(
 }
 
 export type PrintReceiptResult =
-  | { ok: true; method: 'bridge' | 'qz'; printer: string; copies: PrintCopies }
+  | { ok: true; method: 'bridge' | 'qz' | 'escpos'; printer: string; copies: PrintCopies }
   | { ok: false; skipped?: boolean; message: string; reason?: string };
 
 type PrintPayload = {
@@ -240,6 +240,42 @@ export async function printPosReceipt(
 
   const copies = options?.copies ?? getReceiptSettings().printCopies;
   const silent = options?.silent !== false;
+  const settings = getReceiptSettings();
+  const needKitchen = copies === 'kitchen' || copies === 'both';
+  const needCustomer = copies === 'customer' || copies === 'both';
+
+  if (silent && settings.printMode === 'escpos') {
+    const {
+      renderCustomerReceiptPng,
+      renderKitchenReceiptPng,
+    } = await import('./pos-receipt-render.js');
+    const { bridgePrintEscPos } = await import('./pos-print-bridge.js');
+    const { pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
+
+    const kitchen = kitchenFromReceipt(data);
+    const [kPng, cPng] = await Promise.all([
+      needKitchen ? renderKitchenReceiptPng(kitchen, settings) : Promise.resolve(null),
+      needCustomer ? renderCustomerReceiptPng(data, settings) : Promise.resolve(null),
+    ]);
+
+    const imageJobs: { pngBase64: string }[] = [];
+    if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
+    if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
+
+    const escposResult = await bridgePrintEscPos(
+      imageJobs,
+      pickEscPosBridgeSettings(),
+    );
+    if (escposResult.ok) {
+      return { ok: true, method: 'escpos', printer: escposResult.printer, copies };
+    }
+    if (escposResult.reason !== 'bridge-offline') {
+      console.warn('[pos-print] ESC/POS image failed, falling back to PNG/PDF:', escposResult.message);
+    } else {
+      return { ok: false, message: escposResult.message, reason: escposResult.reason };
+    }
+  }
+
   const payloads: PrintPayload[] = [];
 
   const {
@@ -250,8 +286,6 @@ export async function printPosReceipt(
   } = await import('./pos-receipt-render.js');
 
   const kitchen = kitchenFromReceipt(data);
-  const needKitchen = copies === 'kitchen' || copies === 'both';
-  const needCustomer = copies === 'customer' || copies === 'both';
 
   const [kPng, cPng] = await Promise.all([
     needKitchen ? renderKitchenReceiptPng(kitchen) : Promise.resolve(null),

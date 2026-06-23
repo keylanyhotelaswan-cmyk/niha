@@ -117,6 +117,11 @@ export class AmendOrderDto {
   note?: string;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  discountAmount?: number;
+
+  @IsOptional()
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => OrderItemInputDto)

@@ -24,10 +24,12 @@ import {
   savePrinterName,
 } from '../../../lib/pos-receipt.js';
 import {
+  bridgePrintEscPos,
   bridgePrintJobs,
   isPrintBridgeOnline,
   listBridgePrinters,
 } from '../../../lib/pos-print-bridge.js';
+import { pickEscPosBridgeSettings } from '../../../lib/pos-receipt-escpos.js';
 
 type PrintSetupDialogProps = {
   open: boolean;
@@ -65,7 +67,7 @@ export function PrintSetupDialog({ open, onClose }: PrintSetupDialogProps) {
     const saved = readSavedPrinterName();
     setManualName(saved);
     if (list.includes(saved)) setSelected(saved);
-    else setSelected(list.find((p) => /xp-80/i.test(p)) ?? list[0] ?? '');
+    else setSelected(list.find((p) => /xp-?k?200/i.test(p)) ?? list.find((p) => /xp-80/i.test(p)) ?? list[0] ?? '');
     setStatus('ready');
   };
 
@@ -77,15 +79,40 @@ export function PrintSetupDialog({ open, onClose }: PrintSetupDialogProps) {
     setTesting(true);
     setTestMsg('');
     savePrinterName(effectiveName);
-    const receiptData = sampleReceiptData();
+    const settings = getReceiptSettings();
+    const receiptData = sampleReceiptData(settings);
+    const copies = settings.printCopies;
+
+    if (settings.printMode === 'escpos') {
+      const kitchen = kitchenFromReceipt(receiptData);
+      const imageJobs: { pngBase64: string }[] = [];
+      if (copies === 'kitchen' || copies === 'both') {
+        const kPng = await renderKitchenReceiptPng(kitchen, settings);
+        if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
+      }
+      if (copies === 'customer' || copies === 'both') {
+        const cPng = await renderCustomerReceiptPng(receiptData, settings);
+        if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
+      }
+      const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
+      const copyLabel = copies === 'both' ? 'شيف + زبون' : copies === 'kitchen' ? 'شيف' : 'زبون';
+      setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS — عربي صحيح).` : res.message);
+      setTesting(false);
+      return;
+    }
+
     const kitchen = kitchenFromReceipt(receiptData);
-    const kPng = await renderKitchenReceiptPng(kitchen);
-    const cPng = await renderCustomerReceiptPng(receiptData);
     const jobs = [];
-    if (kPng) jobs.push({ pngBase64: kPng.base64, pngHeightPx: kPng.heightPx, pngWidthPx: kPng.widthPx, paperWidthMm: kPng.paperWidthMm, label: 'kitchen' });
-    if (cPng) jobs.push({ pngBase64: cPng.base64, pngHeightPx: cPng.heightPx, pngWidthPx: cPng.widthPx, paperWidthMm: cPng.paperWidthMm, label: 'customer' });
+    if (copies === 'kitchen' || copies === 'both') {
+      const kPng = await renderKitchenReceiptPng(kitchen, settings);
+      if (kPng) jobs.push({ pngBase64: kPng.base64, pngHeightPx: kPng.heightPx, pngWidthPx: kPng.widthPx, paperWidthMm: kPng.paperWidthMm, label: 'kitchen' });
+    }
+    if (copies === 'customer' || copies === 'both') {
+      const cPng = await renderCustomerReceiptPng(receiptData, settings);
+      if (cPng) jobs.push({ pngBase64: cPng.base64, pngHeightPx: cPng.heightPx, pngWidthPx: cPng.widthPx, paperWidthMm: cPng.paperWidthMm, label: 'customer' });
+    }
     const res = await bridgePrintJobs(jobs);
-    setTestMsg(res.ok ? 'تمت طباعة نسخة الشيف + نسخة الزبون.' : res.message);
+    setTestMsg(res.ok ? 'تمت طباعة الاختبار (PNG).' : res.message);
     setTesting(false);
   };
 
@@ -133,7 +160,7 @@ export function PrintSetupDialog({ open, onClose }: PrintSetupDialogProps) {
               setManualName(e.target.value);
               if (!printers.includes(e.target.value)) setSelected('');
             }}
-            helperText="مثال: XP-80C (copy 3)"
+            helperText="مثال: XP-K200L"
           />
           <Typography variant="caption" color="text.secondary">
             الطباعة الصامتة على: <strong>{effectiveName}</strong>
@@ -151,7 +178,7 @@ export function PrintSetupDialog({ open, onClose }: PrintSetupDialogProps) {
         <Button component={RouterLink} to="/settings/receipt" onClick={onClose}>تخصيص الفاتورة</Button>
         <Button onClick={refresh} disabled={status === 'loading'}>إعادة المحاولة</Button>
         <Button onClick={runTestPrint} disabled={testing || !bridgeOk}>
-          طباعة اختبار (شيف + زبون)
+          طباعة اختبار
         </Button>
         <Button onClick={onClose}>إلغاء</Button>
         <Button variant="contained" onClick={() => { savePrinterName(effectiveName); onClose(); }}>

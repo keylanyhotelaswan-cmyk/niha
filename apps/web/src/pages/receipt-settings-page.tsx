@@ -37,9 +37,11 @@ import {
 } from '../lib/pos-receipt.js';
 
 import {
+  bridgePrintEscPos,
   bridgePrintJobs,
   isPrintBridgeOnline,
 } from '../lib/pos-print-bridge.js';
+import { pickEscPosBridgeSettings } from '../lib/pos-receipt-escpos.js';
 
 function ReceiptPreview({ settings, mode }: { settings: ReceiptSettings; mode: 'customer' | 'kitchen' }) {
   const html = useMemo(() => {
@@ -141,6 +143,24 @@ export function ReceiptSettingsPage() {
     const saved = await saveReceiptSettingsWithSync(settings, syncOptions);
     savePrinterName(saved.printerName);
     const sample = sampleReceiptData(saved);
+
+    if (saved.printMode === 'escpos') {
+      const kitchen = kitchenFromReceipt(sample);
+      const { renderCustomerReceiptPng, renderKitchenReceiptPng } = await import('../lib/pos-receipt-render.js');
+      const imageJobs: { pngBase64: string }[] = [];
+      if (saved.printCopies === 'kitchen' || saved.printCopies === 'both') {
+        const kPng = await renderKitchenReceiptPng(kitchen, saved);
+        if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
+      }
+      if (saved.printCopies === 'customer' || saved.printCopies === 'both') {
+        const cPng = await renderCustomerReceiptPng(sample, saved);
+        if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
+      }
+      const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
+      setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS — عربي صحيح).' : res.message);
+      return;
+    }
+
     const kitchen = kitchenFromReceipt(sample);
     const { renderCustomerReceiptPng, renderKitchenReceiptPng } = await import('../lib/pos-receipt-render.js');
     const jobs = [];
@@ -159,7 +179,7 @@ export function ReceiptSettingsPage() {
       paperWidthMm: j.paperWidthMm,
       paperSize: saved.paperSize,
     })));
-    setPrintMsg(res.ok ? 'تمت طباعة الاختبار.' : res.message);
+    setPrintMsg(res.ok ? 'تمت طباعة الاختبار (PNG).' : res.message);
   };
 
   return (
@@ -201,7 +221,7 @@ export function ReceiptSettingsPage() {
                 value={settings.paperWidthMm}
                 onChange={(e) => patch({ paperWidthMm: Number(e.target.value) })}
               >
-                <MenuItem value={80}>80mm (شائع — XP-80C)</MenuItem>
+                <MenuItem value={80}>80mm (شائع — XP-K200L)</MenuItem>
                 <MenuItem value={58}>58mm</MenuItem>
               </TextField>
               <Typography variant="body2" color="text.secondary">
@@ -310,6 +330,17 @@ export function ReceiptSettingsPage() {
 
             <Typography variant="h6" fontWeight={800} gutterBottom>الطباعة</Typography>
             <Stack spacing={2}>
+              <TextField
+                select
+                fullWidth
+                label="طريقة الطباعة"
+                value={settings.printMode}
+                onChange={(e) => patch({ printMode: e.target.value as ReceiptSettings['printMode'] })}
+                helperText="يطبّع الفاتورة كصورة عبر USB مباشرة — عربي صحيح وسريع (موصى به لـ XP-K200L)"
+              >
+                <MenuItem value="escpos">ESC/POS مباشر (عربي صحيح — XP-K200L)</MenuItem>
+                <MenuItem value="png">PDF/صورة (أبطأ — احتياطي)</MenuItem>
+              </TextField>
               <TextField
                 select
                 fullWidth

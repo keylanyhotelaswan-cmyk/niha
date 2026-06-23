@@ -25,8 +25,22 @@ export class OrdersController {
 
   @Get('by-shift')
   @RequirePermissions('pos.use')
-  listByShift(@Query('shiftId') shiftId: string) {
-    return this.ordersService.listClosedForShift(shiftId);
+  listByShift(
+    @Query('shiftId') shiftId: string,
+    @Query('view') view?: string,
+    @Query('filter') filter?: string,
+    @Query('take') take?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    const parsedFilter =
+      filter === 'uncollected' || filter === 'collected' ? filter : 'all';
+    const parsedTake = take ? Number(take) : undefined;
+    return this.ordersService.listClosedForShift(shiftId, {
+      view: view === 'full' ? 'full' : 'list',
+      filter: parsedFilter,
+      ...(parsedTake != null && Number.isFinite(parsedTake) ? { take: parsedTake } : {}),
+      ...(cursor?.trim() ? { cursor: cursor.trim() } : {}),
+    });
   }
 
   @Get()

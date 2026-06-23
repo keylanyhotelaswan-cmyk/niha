@@ -46,16 +46,6 @@ export class OrdersService {
     const discountAmount = dto.discountAmount ?? 0;
     const totalAmount = Math.max(0, subtotal - discountAmount);
 
-    const customerId = await this.customersService.syncFromOrder({
-      branchId: dto.branchId,
-      phone: dto.customerPhone ?? null,
-      name: dto.orderOwnerName ?? null,
-      address: dto.customerAddress ?? null,
-      orderTotal: totalAmount,
-      orderAt: new Date(),
-      incrementStats: true,
-    });
-
     const isCash = paymentMethod.type === 'CASH';
     const isUncollected = dto.collectionStatus === 'UNCOLLECTED';
     const orderCollectionStatus = isUncollected ? 'UNCOLLECTED' : 'PENDING_APPROVAL';
@@ -76,7 +66,6 @@ export class OrdersService {
         customerPhone: this.formatCustomerPhone(dto.customerPhone),
         customerAddress: dto.customerAddress ?? null,
         captainName: dto.captainName ?? null,
-        ...(customerId ? { customerId } : {}),
         subtotal,
         discountAmount,
         taxAmount: 0,
@@ -105,10 +94,30 @@ export class OrdersService {
       include: { items: true, payments: true },
     });
 
-    await this.deductInventoryForOrder(dto.items, dto.branchId, order.id, orderNumber);
+    void this.deductInventoryForOrder(dto.items, dto.branchId, order.id, orderNumber).catch((err) => {
+      console.error(`Inventory deduction failed for order ${orderNumber}:`, err);
+    });
+
+    void this.customersService.syncFromOrder({
+      branchId: dto.branchId,
+      phone: dto.customerPhone ?? null,
+      name: dto.orderOwnerName ?? null,
+      address: dto.customerAddress ?? null,
+      orderTotal: totalAmount,
+      orderAt: new Date(),
+      incrementStats: true,
+    }).then((customerId) => {
+      if (!customerId) return;
+      return this.prisma.order.update({
+        where: { id: order.id },
+        data: { customerId },
+      });
+    }).catch((err) => {
+      console.error(`Customer sync failed for order ${orderNumber}:`, err);
+    });
 
     if (cashBoxId && !isUncollected) {
-      await this.treasuryService.recordSaleReceipt({
+      void this.treasuryService.recordSaleReceipt({
         branchId: dto.branchId,
         cashBoxId,
         shiftId,
@@ -121,6 +130,8 @@ export class OrdersService {
         approvalStatus: 'PENDING',
         affectsCash: isCash,
         note: `تحصيل طلب ${orderNumber}`,
+      }).catch((err) => {
+        console.error(`Treasury receipt failed for order ${orderNumber}:`, err);
       });
     }
 
@@ -318,7 +329,10 @@ export class OrdersService {
     }));
 
     let subtotal = Number(order.subtotal);
-    let totalAmount = Number(order.totalAmount);
+    const discountAmount = dto.discountAmount !== undefined
+      ? Math.max(0, dto.discountAmount)
+      : Number(order.discountAmount);
+    let totalAmount = Math.max(0, subtotal - discountAmount);
 
     if (dto.items !== undefined) {
       const normalizedItems = dto.items
@@ -330,7 +344,7 @@ export class OrdersService {
           lineTotal: item.unitPrice * item.quantity,
         }));
       subtotal = normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0);
-      totalAmount = Math.max(0, subtotal - Number(order.discountAmount));
+      totalAmount = Math.max(0, subtotal - discountAmount);
     }
 
     const amountPaid = Number(order.amountPaid);
@@ -378,7 +392,8 @@ export class OrdersService {
           ...(dto.customerAddress !== undefined ? { customerAddress: dto.customerAddress.trim() || null } : {}),
           ...(dto.captainName !== undefined ? { captainName: dto.captainName.trim() || null } : {}),
           ...(dto.note !== undefined ? { note: dto.note.trim() || null } : {}),
-          ...(dto.items !== undefined
+          ...(dto.discountAmount !== undefined ? { discountAmount } : {}),
+          ...(dto.items !== undefined || dto.discountAmount !== undefined
             ? {
                 subtotal,
                 totalAmount,
@@ -767,21 +782,23 @@ export class OrdersService {
       throw new BadRequestException('Payment method not found');
     }
 
-    const pendingTreasury = await this.prisma.treasuryTransaction.count({
-      where: {
-        sourceType: 'ORDER',
-        sourceId: orderId,
-        transactionType: 'SALE_RECEIPT',
-        approvalStatus: 'PENDING',
-      },
-    });
+    const [pendingTreasury, collectionShiftId] = await Promise.all([
+      this.prisma.treasuryTransaction.count({
+        where: {
+          sourceType: 'ORDER',
+          sourceId: orderId,
+          transactionType: 'SALE_RECEIPT',
+          approvalStatus: 'PENDING',
+        },
+      }),
+      this.resolveCollectionShiftId(order),
+    ]);
     if (pendingTreasury > 0) {
       throw new BadRequestException('Order already has a pending treasury receipt');
     }
 
     const isCash = paymentMethod.type === 'CASH';
     const amount = dto.amount ?? Number(order.totalAmount);
-    const collectionShiftId = await this.resolveCollectionShiftId(order);
 
     await this.treasuryService.recordSaleReceipt({
       branchId: order.branchId,
@@ -869,7 +886,9 @@ export class OrdersService {
       unitPrice: Number(item.unitPrice),
     }));
 
-    await this.deductInventoryForOrder(items, closed.branchId, closed.id, closed.orderNumber);
+    void this.deductInventoryForOrder(items, closed.branchId, closed.id, closed.orderNumber).catch((err) => {
+      console.error(`Inventory deduction failed for order ${closed.orderNumber}:`, err);
+    });
 
     await this.logOrderAudit({
       branchId: closed.branchId,
@@ -949,35 +968,84 @@ export class OrdersService {
     });
   }
 
-  async listClosedForShift(shiftId: string) {
+  async listClosedForShift(
+    shiftId: string,
+    opts: {
+      view?: 'list' | 'full';
+      filter?: 'all' | 'uncollected' | 'collected';
+      take?: number;
+      cursor?: string;
+    } = {},
+  ) {
+    const view = opts.view ?? 'list';
+    const filter = opts.filter ?? 'all';
+
     const shift = await this.prisma.shift.findUnique({
       where: { id: shiftId },
-      select: { branchId: true, cashBoxId: true },
+      select: { branchId: true, cashBoxId: true, status: true },
     });
-    if (!shift?.cashBoxId) {
-      return this.prisma.order.findMany({
-        where: { shiftId, status: 'CLOSED' },
-        select: this.closedOrderSelect(),
-        orderBy: { closedAt: 'desc' },
-      });
+    if (!shift) {
+      throw new NotFoundException('Shift not found');
     }
 
-    return this.prisma.order.findMany({
-      where: {
+    const select = view === 'full' ? this.closedOrderSelect() : this.closedOrderListSelect();
+    const uncollectedWhere: Prisma.OrderWhereInput = {
+      OR: [{ collectionStatus: 'UNCOLLECTED' }, { paymentStatus: 'PENDING' }],
+    };
+
+    let baseWhere: Prisma.OrderWhereInput;
+    if (shift.status === 'OPEN') {
+      baseWhere = { shiftId, status: 'CLOSED' };
+    } else if (shift.cashBoxId) {
+      baseWhere = {
         branchId: shift.branchId,
         cashBoxId: shift.cashBoxId,
         status: 'CLOSED',
         OR: [
           { shiftId },
           {
-            OR: [{ collectionStatus: 'UNCOLLECTED' }, { paymentStatus: 'PENDING' }],
+            ...uncollectedWhere,
             shift: { status: 'CLOSED', cashBoxId: shift.cashBoxId },
           },
         ],
-      },
-      select: this.closedOrderSelect(),
+      };
+    } else {
+      baseWhere = { shiftId, status: 'CLOSED' };
+    }
+
+    let where: Prisma.OrderWhereInput = baseWhere;
+    if (filter === 'uncollected') {
+      where = { AND: [baseWhere, uncollectedWhere] };
+    } else if (filter === 'collected') {
+      where = { AND: [baseWhere, { NOT: uncollectedWhere }] };
+    }
+
+    const cursorDate = opts.cursor ? new Date(opts.cursor) : undefined;
+    if (cursorDate && !Number.isNaN(cursorDate.getTime())) {
+      where = { AND: [where, { closedAt: { lt: cursorDate } }] };
+    }
+
+    const defaultTake = filter === 'collected' ? 10 : undefined;
+    const limit = opts.take != null && Number.isFinite(opts.take)
+      ? Math.min(100, Math.max(1, Math.floor(opts.take)))
+      : defaultTake;
+
+    const orders = await this.prisma.order.findMany({
+      where,
+      select,
       orderBy: { closedAt: 'desc' },
+      ...(limit != null ? { take: limit + 1 } : {}),
     });
+
+    let nextCursor: string | null = null;
+    let result = orders;
+    if (limit != null && orders.length > limit) {
+      result = orders.slice(0, limit);
+      const last = result[result.length - 1] as { closedAt?: Date | null };
+      nextCursor = last?.closedAt?.toISOString() ?? null;
+    }
+
+    return { orders: result, nextCursor };
   }
 
   async getOrderDetail(orderId: string) {
@@ -989,6 +1057,30 @@ export class OrdersService {
       throw new NotFoundException('Order not found');
     }
     return order;
+  }
+
+  private closedOrderListSelect() {
+    return {
+      id: true,
+      orderNumber: true,
+      orderType: true,
+      customerName: true,
+      customerPhone: true,
+      customerAddress: true,
+      captainName: true,
+      totalAmount: true,
+      discountAmount: true,
+      note: true,
+      collectionStatus: true,
+      paymentStatus: true,
+      status: true,
+      cancelRequestedAt: true,
+      cancellationReason: true,
+      closedAt: true,
+      openedAt: true,
+      createdBy: { select: { fullName: true, username: true } },
+      _count: { select: { items: true } },
+    } satisfies Prisma.OrderSelect;
   }
 
   private closedOrderSelect() {
