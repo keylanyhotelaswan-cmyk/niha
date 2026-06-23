@@ -682,7 +682,6 @@ export function PosPage() {
           <Button variant="outlined" onClick={() => runCollect(false)}>تحصيل فقط</Button>
           {canUsePrint ? (
             <Button variant="contained" onClick={() => runCollect(true)}>تحصيل وطباعة</Button>
-            </Button>
           ) : null}
         </DialogActions>
       </Dialog>
