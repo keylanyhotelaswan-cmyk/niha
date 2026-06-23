@@ -28,7 +28,15 @@ export function usePosCatalog(branchId: string, accessToken: string | null) {
     .filter((s) => s.isAvailable !== false)
     .map((s) => ({ id: s.id, name: s.name }));
 
-  const products = (data?.products ?? []) as Array<{ id: string; sku?: string | null }>;
+  type PosCatalogProduct = {
+    id: string;
+    name: string;
+    salePrice: number;
+    sku?: string | null;
+    isAvailable?: boolean;
+  };
+
+  const products = (data?.products ?? []) as PosCatalogProduct[];
   const paidSauceProductIds = products
     .filter((p) => isPaidSauceSku(p.sku))
     .map((p) => p.id);
