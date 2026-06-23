@@ -1,5 +1,14 @@
 export type PosSauceOption = { id: string; name: string };
 
+/** علب صوص للبيع — لا تُعرض كصوص مجاني على الصنف */
+export function isPaidSauceSku(sku?: string | null) {
+  return Boolean(sku?.startsWith('NY-SAU-'));
+}
+
+export function isFreeSauceSku(sku?: string | null) {
+  return Boolean(sku?.startsWith('NY-FS-'));
+}
+
 export function formatItemNote(userNote: string, sauceNames: string[]) {
   const trimmed = userNote.trim();
   const unique = [...new Set(sauceNames.map((n) => n.trim()).filter(Boolean))];

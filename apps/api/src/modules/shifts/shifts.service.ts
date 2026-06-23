@@ -5,6 +5,7 @@ import { SequenceService } from '../sequence/sequence.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
 import { OpenShiftDto } from './dto/open-shift.dto.js';
 import { CloseShiftDto } from './dto/close-shift.dto.js';
+import { splitPosCatalogProducts } from './pos-catalog-sauces.js';
 
 @Injectable()
 export class ShiftsService {
@@ -940,15 +941,7 @@ export class ShiftsService {
       createdAt: product.createdAt,
     }));
 
-    const sauceCategoryIds = new Set(
-      categories.filter((c) => c.name.includes('صوص')).map((c) => c.id),
-    );
-    const sauces = mappedProducts.filter(
-      (p) => sauceCategoryIds.has(p.categoryId) || (p.sku?.startsWith('NY-SAU-') ?? false),
-    );
-    const menuProducts = mappedProducts.filter(
-      (p) => !sauceCategoryIds.has(p.categoryId) && !(p.sku?.startsWith('NY-SAU-') ?? false),
-    );
+    const { menuProducts, sauces } = splitPosCatalogProducts(mappedProducts, categories);
 
     return {
       categories,

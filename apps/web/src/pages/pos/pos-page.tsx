@@ -555,6 +555,7 @@ export function PosPage() {
         orderNote={order.orderNote}
         onOrderNote={order.setOrderNote}
         sauces={catalog.sauces}
+        paidSauceProductIds={catalog.paidSauceProductIds}
         onToggleItemSauce={order.toggleItemSauce}
         subtotal={order.subtotal}
         discount={order.discount}
@@ -601,6 +602,7 @@ export function PosPage() {
         order={editOrder}
         products={catalog.products}
         sauces={catalog.sauces}
+        paidSauceProductIds={catalog.paidSauceProductIds}
         deliveryDrivers={deliveryDrivers}
         onClose={() => setEditOrder(null)}
         onSave={handleAmendOrder}

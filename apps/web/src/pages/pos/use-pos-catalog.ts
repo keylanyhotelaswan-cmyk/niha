@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { usePosCatalog as usePosCatalogQuery } from '../../lib/hooks.js';
 import type { PosSauceOption } from '../../lib/pos-order-sauces.js';
+import { isPaidSauceSku } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES, DEFAULT_PAYMENT_METHODS, type PaymentMethodOption } from './constants.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
 
@@ -27,10 +28,16 @@ export function usePosCatalog(branchId: string, accessToken: string | null) {
     .filter((s) => s.isAvailable !== false)
     .map((s) => ({ id: s.id, name: s.name }));
 
+  const products = (data?.products ?? []) as Array<{ id: string; sku?: string | null }>;
+  const paidSauceProductIds = products
+    .filter((p) => isPaidSauceSku(p.sku))
+    .map((p) => p.id);
+
   return {
     categories: (data?.categories ?? []) as any[],
-    products: (data?.products ?? []) as any[],
+    products,
     sauces,
+    paidSauceProductIds,
     paymentMethods,
     activeCategory,
     setActiveCategory,

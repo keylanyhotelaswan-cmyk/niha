@@ -69,6 +69,7 @@ type OrderModalProps = {
   orderNote: string;
   onOrderNote: (v: string) => void;
   sauces?: Array<{ id: string; name: string }>;
+  paidSauceProductIds?: string[];
   onToggleItemSauce?: (productId: string, sauceName: string) => void;
   subtotal: number;
   discount: number;
@@ -112,6 +113,7 @@ export function OrderModal(props: OrderModalProps) {
   const [validationError, setValidationError] = useState('');
   const [showFieldErrors, setShowFieldErrors] = useState(false);
   const drivers = props.deliveryDrivers ?? [];
+  const paidSauceIds = new Set(props.paidSauceProductIds ?? []);
   const takeawayCheck = validateTakeawayOrderFields(props.orderType, props.orderOwnerName, props.customerPhone);
   const missingName = props.orderType === 'takeaway' && !props.orderOwnerName.trim();
   const missingPhone = props.orderType === 'takeaway' && !props.customerPhone.trim();
@@ -327,7 +329,7 @@ export function OrderModal(props: OrderModalProps) {
                             <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity + 1)}>+</IconButton>
                             <Typography variant="caption" color="text.secondary">{formatCurrency(item.unitPrice)}</Typography>
                           </Stack>
-                          {props.sauces && props.sauces.length > 0 ? (
+                          {props.sauces && props.sauces.length > 0 && !paidSauceIds.has(item.productId) ? (
                             <>
                               <Typography variant="caption" color="text.secondary" fontWeight={700}>
                                 صوصات (مجاناً)

@@ -45,6 +45,7 @@ type OrderEditDialogProps = {
   order: SavedOrder | null;
   products: PosProduct[];
   sauces?: Array<{ id: string; name: string }>;
+  paidSauceProductIds?: string[];
   deliveryDrivers?: DeliveryDriver[];
   onClose: () => void;
   onSave: (payload: OrderAmendPayload) => Promise<{ ok: boolean; error?: string }>;
@@ -60,6 +61,7 @@ export function OrderEditDialog({
   order,
   products,
   sauces = [],
+  paidSauceProductIds = [],
   deliveryDrivers = [],
   onClose,
   onSave,
@@ -95,6 +97,7 @@ export function OrderEditDialog({
   const total = Math.max(0, subtotal - discount);
 
   const availableProducts = products.filter((p) => p.isAvailable !== false);
+  const paidSauceIds = new Set(paidSauceProductIds);
 
   const addProduct = (productId: string) => {
     const product = products.find((p) => p.id === productId);
@@ -298,8 +301,12 @@ export function OrderEditDialog({
                       </Stack>
                     </Stack>
                     <Typography variant="caption" color="text.secondary">{formatCurrency(item.unitPrice)}</Typography>
-                    {sauces.length > 0 ? (
-                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                    {sauces.length > 0 && !paidSauceIds.has(item.productId) ? (
+                      <>
+                        <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                          صوصات (مجاناً)
+                        </Typography>
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
                         {sauces.map((sauce) => {
                           const selected = item.sauces?.includes(sauce.name) ?? false;
                           return (
@@ -314,7 +321,8 @@ export function OrderEditDialog({
                             />
                           );
                         })}
-                      </Stack>
+                        </Stack>
+                      </>
                     ) : null}
                   </Stack>
                 </Paper>

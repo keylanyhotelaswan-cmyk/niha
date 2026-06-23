@@ -40,6 +40,19 @@ export const nihaYamMenu = [
     ],
   },
   {
+    name: 'صوصات مجانية',
+    products: [
+      { sku: 'NY-FS-SOY', name: 'صويا صوص', salePrice: 0 },
+      { sku: 'NY-FS-TERI', name: 'ترياكي صوص', salePrice: 0 },
+      { sku: 'NY-FS-SWCH', name: 'سويت تشيلي', salePrice: 0 },
+      { sku: 'NY-FS-MAYO', name: 'مايونيز', salePrice: 0 },
+      { sku: 'NY-FS-HMAYO', name: 'هوت مايو', salePrice: 0 },
+      { sku: 'NY-FS-BBQ', name: 'باربيكيو', salePrice: 0 },
+      { sku: 'NY-FS-RANCH', name: 'رانش', salePrice: 0 },
+      { sku: 'NY-FS-CHIO', name: 'تشيلي أويل', salePrice: 0 },
+    ],
+  },
+  {
     name: 'صوصات إضافية',
     products: [
       { sku: 'NY-SAU-SOY', name: 'صويا صوص', salePrice: 20 },
