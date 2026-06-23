@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { usePosCatalog as usePosCatalogQuery } from '../../lib/hooks.js';
-import { ALL_CATEGORIES, DEFAULT_PAYMENT_METHODS } from './constants.js';
 import { isPaidSauceSku } from '../../lib/pos-order-sauces.js';
+import { ALL_CATEGORIES, DEFAULT_PAYMENT_METHODS } from './constants.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
 export function usePosCatalog(branchId, accessToken) {
     const catalogBranchId = branchId || readPosBranchId();
@@ -20,7 +20,7 @@ export function usePosCatalog(branchId, accessToken) {
     const sauces = (data?.sauces ?? [])
         .filter((s) => s.isAvailable !== false)
         .map((s) => ({ id: s.id, name: s.name }));
-    const products = data?.products ?? [];
+    const products = (data?.products ?? []);
     const paidSauceProductIds = products
         .filter((p) => isPaidSauceSku(p.sku))
         .map((p) => p.id);

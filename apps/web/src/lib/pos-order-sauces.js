@@ -2,11 +2,9 @@
 export function isPaidSauceSku(sku) {
     return Boolean(sku?.startsWith('NY-SAU-'));
 }
-
 export function isFreeSauceSku(sku) {
     return Boolean(sku?.startsWith('NY-FS-'));
 }
-
 export function formatItemNote(userNote, sauceNames) {
     const trimmed = userNote.trim();
     const unique = [...new Set(sauceNames.map((n) => n.trim()).filter(Boolean))];
