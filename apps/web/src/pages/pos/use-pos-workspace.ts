@@ -92,10 +92,13 @@ export function usePosWorkspace() {
   const displayPosSummary = posSummary ?? closeShiftSummary;
 
   const {
-    data: uncollectedPage,
+    data: uncollectedPages,
     isPending: uncollectedPending,
     isError: uncollectedError,
     refetch: refetchUncollected,
+    fetchNextPage: fetchNextUncollectedPage,
+    hasNextPage: hasMoreUncollected,
+    isFetchingNextPage: uncollectedLoadingMore,
   } = useShiftUncollectedOrders(effectiveShiftId);
 
   const {
@@ -161,14 +164,14 @@ export function usePosWorkspace() {
   );
 
   const shiftClosedOrdersSource = useMemo(() => {
-    const uncollected = uncollectedPage?.orders ?? [];
+    const uncollected = uncollectedPages?.pages.flatMap((p) => p.orders) ?? [];
     const collected = collectedPages?.pages.flatMap((p) => p.orders) ?? [];
     if (uncollected.length > 0 || collected.length > 0) {
       return [...uncollected, ...collected];
     }
     const fromSummary = posSummary?.shiftClosedOrders ?? posContext?.posSummary?.shiftClosedOrders;
     return fromSummary ?? [];
-  }, [uncollectedPage, collectedPages, posSummary, posContext]);
+  }, [uncollectedPages, collectedPages, posSummary, posContext]);
 
   const shiftClosedOrders = useMemo<SavedOrder[]>(() => {
     const seen = new Set<string>();
@@ -195,6 +198,18 @@ export function usePosWorkspace() {
     () => uncollectedOrders.reduce((s, o) => s + o.total, 0),
     [uncollectedOrders],
   );
+
+  const displayUncollectedCount =
+    (displayPosSummary as { uncollectedCount?: number } | null)?.uncollectedCount
+    ?? uncollectedOrders.length;
+  const displayUncollectedAmount =
+    (displayPosSummary as { uncollectedTotal?: number } | null)?.uncollectedTotal
+    ?? uncollectedAmount;
+  const summaryOrdersCount = (displayPosSummary as { ordersCount?: number } | null)?.ordersCount;
+  const displayCollectedCount =
+    summaryOrdersCount != null && (displayPosSummary as { uncollectedCount?: number })?.uncollectedCount != null
+      ? summaryOrdersCount - (displayPosSummary as { uncollectedCount: number }).uncollectedCount
+      : collectedOrders.length;
 
   const resolvedBranchId = posContext?.branch?.id || branchId || branchList[0]?.id;
   const resolvedCashBoxId = posContext?.cashBox?.id || selectedCashBoxId || cashBoxes[0]?.id;
@@ -439,6 +454,9 @@ export function usePosWorkspace() {
     uncollectedOrders,
     collectedOrders,
     uncollectedAmount,
+    displayUncollectedCount,
+    displayUncollectedAmount,
+    displayCollectedCount,
     operatorName,
     shiftOperatorName,
     resolvedBranchId,
@@ -457,6 +475,9 @@ export function usePosWorkspace() {
     fetchNextCollectedPage: fetchNextPage,
     hasMoreCollected: hasNextPage,
     collectedLoadingMore: isFetchingNextPage,
+    fetchNextUncollectedPage,
+    hasMoreUncollected,
+    uncollectedLoadingMore,
     refetchPosContext,
     refetchSuspended,
   };

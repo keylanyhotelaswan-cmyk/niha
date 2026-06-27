@@ -7,7 +7,7 @@ import {
   apiResumeOrder,
   apiSuspendOrder,
 } from '../../lib/api.js';
-import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, refetchPosOrderData } from '../../lib/hooks.js';
+import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, POS_QUERY_KEYS, refetchPosOrderData } from '../../lib/hooks.js';
 import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
 import {
   isAutoPrintEnabled,
@@ -354,7 +354,7 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
         catalog.onNotify?.((res as any).body ?? (res as any).error ?? 'فشل إغلاق الطلب');
         void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftIdForRefresh] });
         void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftIdForRefresh] });
-        void refetchPosOrderData(queryClient, shiftIdForRefresh);
+        void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh) });
         return;
       }
 
@@ -365,7 +365,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
       if (shiftIdForRefresh && apiOrder?.id) {
         patchShiftOrderAdded(queryClient, shiftIdForRefresh, apiOrder);
       }
-      void refetchPosOrderData(queryClient, shiftIdForRefresh);
+      void queryClient.invalidateQueries({
+        queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh),
+      });
     })();
 
     return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
@@ -446,7 +448,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
         if (shiftIdForRefresh && res.data) {
           patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, res.data as Record<string, unknown>);
         }
-        void refetchPosOrderData(queryClient, shiftIdForRefresh);
+        void queryClient.invalidateQueries({
+          queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh),
+        });
       } else {
         catalog.onNotify?.(
           (res as { body?: string; error?: string }).body

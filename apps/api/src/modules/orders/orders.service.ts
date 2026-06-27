@@ -9,6 +9,7 @@ import { AddPaymentDto, AmendOrderDto, CancelOrderRequestDto, CreateOpenOrderDto
 import { AuditService } from '../audit/audit.service.js';
 import { CustomersService } from '../customers/customers.service.js';
 import { isValidCustomerPhone, normalizeCustomerPhone } from '../customers/customer-phone.util.js';
+import { uncollectedOrderOrWhere } from './order-collection.util.js';
 
 @Injectable()
 export class OrdersService {
@@ -953,6 +954,7 @@ export class OrdersService {
         createdBy: { select: { fullName: true, username: true } },
       },
       orderBy: { openedAt: 'desc' },
+      take: 50,
     });
   }
 
@@ -989,9 +991,7 @@ export class OrdersService {
     }
 
     const select = view === 'full' ? this.closedOrderSelect() : this.closedOrderListSelect();
-    const uncollectedWhere: Prisma.OrderWhereInput = {
-      OR: [{ collectionStatus: 'UNCOLLECTED' }, { paymentStatus: 'PENDING' }],
-    };
+    const uncollectedWhere: Prisma.OrderWhereInput = uncollectedOrderOrWhere;
 
     let baseWhere: Prisma.OrderWhereInput;
     if (shift.status === 'OPEN') {
@@ -1025,7 +1025,7 @@ export class OrdersService {
       where = { AND: [where, { closedAt: { lt: cursorDate } }] };
     }
 
-    const defaultTake = filter === 'collected' ? 10 : undefined;
+    const defaultTake = filter === 'collected' ? 10 : 25;
     const limit = opts.take != null && Number.isFinite(opts.take)
       ? Math.min(100, Math.max(1, Math.floor(opts.take)))
       : defaultTake;

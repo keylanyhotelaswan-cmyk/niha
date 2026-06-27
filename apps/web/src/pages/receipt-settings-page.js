@@ -7,8 +7,8 @@ import { useBranches } from '../lib/hooks.js';
 import { readPosBranchId } from '../lib/pos-store.js';
 import { getReceiptSettings, hydrateReceiptSettingsFromServer, receiptLayoutFromSettings, resetReceiptSettings, sampleReceiptData, saveReceiptSettingsWithSync, } from '../lib/pos-receipt-settings.js';
 import { buildCustomerReceiptHtml, buildKitchenReceiptHtml, kitchenFromReceipt, savePrinterName, } from '../lib/pos-receipt.js';
-import { bridgePrintEscPos, bridgePrintJobs, isPrintBridgeOnline, } from '../lib/pos-print-bridge.js';
-import { pickEscPosBridgeSettings } from '../lib/pos-receipt-escpos.js';
+import { bridgePrintEscPos, bridgePrintJobs, isPrintBridgeOnline, listBridgePrinters, } from '../lib/pos-print-bridge.js';
+import { pickEscPosBridgeSettings, buildEscPosJobs } from '../lib/pos-receipt-escpos.js';
 function ReceiptPreview({ settings, mode }) {
     const html = useMemo(() => {
         const sample = sampleReceiptData(settings);
@@ -44,12 +44,29 @@ export function ReceiptSettingsPage() {
     const [savedMsg, setSavedMsg] = useState('');
     const [printMsg, setPrintMsg] = useState('');
     const [bridgeOk, setBridgeOk] = useState(false);
+    const [bridgePrinters, setBridgePrinters] = useState([]);
     const layout = useMemo(() => receiptLayoutFromSettings(settings), [settings]);
     const patch = useCallback((partial) => {
         setSettings((prev) => ({ ...prev, ...partial }));
     }, []);
     useEffect(() => {
-        isPrintBridgeOnline().then(setBridgeOk);
+        void (async () => {
+            const online = await isPrintBridgeOnline();
+            setBridgeOk(online);
+            if (!online) {
+                setBridgePrinters([]);
+                return;
+            }
+            const list = await listBridgePrinters();
+            setBridgePrinters(list);
+            if (list.length && !list.includes(settings.printerName)) {
+                const guess = list.find((p) => /xp-?k?200/i.test(p))
+                    ?? list.find((p) => /xp-?80/i.test(p))
+                    ?? list[0];
+                if (guess)
+                    patch({ printerName: guess });
+            }
+        })();
     }, []);
     useEffect(() => {
         if (!branchId || !accessToken)
@@ -89,21 +106,14 @@ export function ReceiptSettingsPage() {
         savePrinterName(saved.printerName);
         const sample = sampleReceiptData(saved);
         if (saved.printMode === 'escpos') {
-            const kitchen = kitchenFromReceipt(sample);
-            const { renderCustomerReceiptPng, renderKitchenReceiptPng } = await import('../lib/pos-receipt-render.js');
-            const imageJobs = [];
-            if (saved.printCopies === 'kitchen' || saved.printCopies === 'both') {
-                const kPng = await renderKitchenReceiptPng(kitchen, saved);
-                if (kPng)
-                    imageJobs.push({ pngBase64: kPng.base64 });
-            }
-            if (saved.printCopies === 'customer' || saved.printCopies === 'both') {
-                const cPng = await renderCustomerReceiptPng(sample, saved);
-                if (cPng)
-                    imageJobs.push({ pngBase64: cPng.base64 });
-            }
-            const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
-            setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS — عربي صحيح).' : res.message);
+            const { printPosReceipt } = await import('../lib/pos-receipt.js');
+            const res = await printPosReceipt(sample, { force: true, silent: true, copies: saved.printCopies });
+            setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS — عربي صحيح).' : res.message ?? 'فشل الطباعة');
+            return;
+        }
+        if (saved.printMode === 'escpos-text') {
+            const res = await bridgePrintEscPos(buildEscPosJobs(sample, saved.printCopies), pickEscPosBridgeSettings());
+            setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS نصي).' : res.message);
             return;
         }
         const kitchen = kitchenFromReceipt(sample);
@@ -136,5 +146,9 @@ export function ReceiptSettingsPage() {
                                                         const next = [...settings.deliveryDrivers];
                                                         next[index] = { ...next[index], name: next[index]?.name ?? '', phone: e.target.value };
                                                         patch({ deliveryDrivers: next });
-                                                    } }), _jsx(Button, { color: "error", onClick: () => patch({ deliveryDrivers: settings.deliveryDrivers.filter((_, i) => i !== index) }), children: "\u062D\u0630\u0641" })] }, index))), _jsx(Button, { variant: "outlined", onClick: () => patch({ deliveryDrivers: [...settings.deliveryDrivers, { name: '' }] }), children: "+ \u0625\u0636\u0627\u0641\u0629 \u0633\u0627\u0626\u0642" })] }), _jsx(Divider, { sx: { my: 3 } }), _jsx(Typography, { variant: "h6", fontWeight: 800, gutterBottom: true, children: "\u0627\u0644\u0637\u0628\u0627\u0639\u0629" }), _jsxs(Stack, { spacing: 2, children: [_jsxs(TextField, { select: true, fullWidth: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u0637\u0628\u0627\u0639\u0629", value: settings.printMode, onChange: (e) => patch({ printMode: e.target.value }), helperText: "\u064A\u0637\u0628\u0651\u0639 \u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629 \u0643\u0635\u0648\u0631\u0629 \u0639\u0628\u0631 USB \u0645\u0628\u0627\u0634\u0631\u0629 \u2014 \u0639\u0631\u0628\u064A \u0635\u062D\u064A\u062D \u0648\u0633\u0631\u064A\u0639 (\u0645\u0648\u0635\u0649 \u0628\u0647 \u0644\u0640 XP-K200L)", children: [_jsx(MenuItem, { value: "escpos", children: "ESC/POS \u0645\u0628\u0627\u0634\u0631 (\u0639\u0631\u0628\u064A \u0635\u062D\u064A\u062D \u2014 XP-K200L)" }), _jsx(MenuItem, { value: "png", children: "PDF/\u0635\u0648\u0631\u0629 (\u0623\u0628\u0637\u0623 \u2014 \u0627\u062D\u062A\u064A\u0627\u0637\u064A)" })] }), _jsxs(TextField, { select: true, fullWidth: true, label: "\u0646\u0633\u062E \u0627\u0644\u0637\u0628\u0627\u0639\u0629 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A\u0629", value: settings.printCopies, onChange: (e) => patch({ printCopies: e.target.value }), children: [_jsx(MenuItem, { value: "both", children: "\u0634\u064A\u0641 + \u0632\u0628\u0648\u0646" }), _jsx(MenuItem, { value: "kitchen", children: "\u0634\u064A\u0641 \u0641\u0642\u0637" }), _jsx(MenuItem, { value: "customer", children: "\u0632\u0628\u0648\u0646 \u0641\u0642\u0637" })] }), _jsx(FormControlLabel, { control: _jsx(Switch, { checked: settings.autoPrint, onChange: (e) => patch({ autoPrint: e.target.checked }) }), label: "\u0637\u0628\u0627\u0639\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0629 \u0639\u0646\u062F \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0637\u0644\u0628" }), _jsx(FormControlLabel, { control: _jsx(Switch, { checked: settings.cashierPrintingEnabled, onChange: (e) => patch({ cashierPrintingEnabled: e.target.checked }) }), label: "\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0637\u0628\u0627\u0639\u0629 \u0644\u0644\u0643\u0627\u0634\u064A\u0631 (\u0646\u0641\u0633 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0637\u0627\u0628\u0639\u0629)" }), _jsx(TextField, { fullWidth: true, label: "\u0645\u0642\u0627\u0633 \u0627\u0644\u0648\u0631\u0642 \u0641\u064A Windows", value: settings.paperSize, onChange: (e) => patch({ paperSize: e.target.value }), helperText: "\u064A\u062C\u0628 \u0623\u0646 \u064A\u0637\u0627\u0628\u0642 \u0627\u0644\u0627\u0633\u0645 \u0641\u064A \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0637\u0627\u0628\u0639\u0629 \u2014 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A: 80(72.1) x 297 mm" }), _jsx(TextField, { fullWidth: true, label: "\u0627\u0633\u0645 \u0627\u0644\u0637\u0627\u0628\u0639\u0629", value: settings.printerName, onChange: (e) => patch({ printerName: e.target.value }), helperText: bridgeOk ? 'Print Bridge متصل' : 'شغّل Print Bridge للطباعة الصامتة' })] }), _jsxs(Stack, { direction: "row", flexWrap: "wrap", gap: 1, sx: { mt: 3 }, children: [_jsx(Button, { variant: "contained", onClick: handleSave, children: "\u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A" }), _jsx(Button, { variant: "outlined", onClick: handleReset, children: "\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A" }), _jsx(Button, { variant: "outlined", onClick: handleTestPrint, disabled: !bridgeOk, children: "\u0637\u0628\u0627\u0639\u0629 \u0627\u062E\u062A\u0628\u0627\u0631" }), _jsx(Button, { component: RouterLink, to: "/pos", children: "\u0627\u0644\u0639\u0648\u062F\u0629 \u0644\u0646\u0642\u0637\u0629 \u0627\u0644\u0628\u064A\u0639" })] })] }) }), _jsx(Grid, { item: true, xs: 12, lg: 5, children: _jsxs(Paper, { sx: { p: 2, borderRadius: 3, position: { lg: 'sticky' }, top: 16 }, children: [_jsx(Typography, { variant: "h6", fontWeight: 800, gutterBottom: true, children: "\u0645\u0639\u0627\u064A\u0646\u0629 \u0645\u0628\u0627\u0634\u0631\u0629" }), _jsxs(Tabs, { value: previewTab, onChange: (_, v) => setPreviewTab(v), sx: { mb: 2 }, children: [_jsx(Tab, { value: "customer", label: "\u0641\u0627\u062A\u0648\u0631\u0629 \u0627\u0644\u0632\u0628\u0648\u0646" }), _jsx(Tab, { value: "kitchen", label: "\u0641\u0627\u062A\u0648\u0631\u0629 \u0627\u0644\u0645\u0637\u0628\u062E" })] }), _jsx(ReceiptPreview, { settings: settings, mode: previewTab })] }) })] })] }));
+                                                    } }), _jsx(Button, { color: "error", onClick: () => patch({ deliveryDrivers: settings.deliveryDrivers.filter((_, i) => i !== index) }), children: "\u062D\u0630\u0641" })] }, index))), _jsx(Button, { variant: "outlined", onClick: () => patch({ deliveryDrivers: [...settings.deliveryDrivers, { name: '' }] }), children: "+ \u0625\u0636\u0627\u0641\u0629 \u0633\u0627\u0626\u0642" })] }), _jsx(Divider, { sx: { my: 3 } }), _jsx(Typography, { variant: "h6", fontWeight: 800, gutterBottom: true, children: "\u0627\u0644\u0637\u0628\u0627\u0639\u0629" }), _jsxs(Stack, { spacing: 2, children: [_jsxs(TextField, { select: true, fullWidth: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u0637\u0628\u0627\u0639\u0629", value: settings.printMode, onChange: (e) => patch({ printMode: e.target.value }), helperText: "ESC/POS \u0635\u0648\u0631\u0629 = \u0639\u0631\u0628\u064A \u0648\u0627\u0636\u062D \u0639\u0644\u0649 XPrinter (\u0645\u0648\u0635\u0649 \u0628\u0647). \u0627\u0644\u0646\u0635\u064A = \u0633\u0631\u064A\u0639 \u0644\u0643\u0646 \u0627\u0644\u0639\u0631\u0628\u064A \u0642\u062F \u064A\u0638\u0647\u0631 \u0631\u0645\u0648\u0632.", children: [_jsx(MenuItem, { value: "escpos", children: "ESC/POS \u0635\u0648\u0631\u0629 (\u0639\u0631\u0628\u064A \u2014 \u0645\u0648\u0635\u0649 \u0628\u0647)" }), _jsx(MenuItem, { value: "escpos-text", children: "ESC/POS \u0646\u0635\u064A (\u0633\u0631\u064A\u0639 \u2014 \u0628\u062F\u0648\u0646 \u0639\u0631\u0628\u064A)" }), _jsx(MenuItem, { value: "png", children: "PDF/\u0635\u0648\u0631\u0629 (\u0627\u062D\u062A\u064A\u0627\u0637\u064A)" })] }), _jsxs(TextField, { select: true, fullWidth: true, label: "\u0646\u0633\u062E \u0627\u0644\u0637\u0628\u0627\u0639\u0629 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A\u0629", value: settings.printCopies, onChange: (e) => patch({ printCopies: e.target.value }), children: [_jsx(MenuItem, { value: "both", children: "\u0634\u064A\u0641 + \u0632\u0628\u0648\u0646" }), _jsx(MenuItem, { value: "kitchen", children: "\u0634\u064A\u0641 \u0641\u0642\u0637" }), _jsx(MenuItem, { value: "customer", children: "\u0632\u0628\u0648\u0646 \u0641\u0642\u0637" })] }), _jsx(FormControlLabel, { control: _jsx(Switch, { checked: settings.autoPrint, onChange: (e) => patch({ autoPrint: e.target.checked }) }), label: "\u0637\u0628\u0627\u0639\u0629 \u062A\u0644\u0642\u0627\u0626\u064A\u0629 \u0639\u0646\u062F \u0625\u063A\u0644\u0627\u0642 \u0627\u0644\u0637\u0644\u0628" }), _jsx(FormControlLabel, { control: _jsx(Switch, { checked: settings.cashierPrintingEnabled, onChange: (e) => patch({ cashierPrintingEnabled: e.target.checked }) }), label: "\u062A\u0641\u0639\u064A\u0644 \u0627\u0644\u0637\u0628\u0627\u0639\u0629 \u0644\u0644\u0643\u0627\u0634\u064A\u0631 (\u0646\u0641\u0633 \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0637\u0627\u0628\u0639\u0629)" }), _jsx(TextField, { fullWidth: true, label: "\u0645\u0642\u0627\u0633 \u0627\u0644\u0648\u0631\u0642 \u0641\u064A Windows", value: settings.paperSize, onChange: (e) => patch({ paperSize: e.target.value }), helperText: "\u064A\u062C\u0628 \u0623\u0646 \u064A\u0637\u0627\u0628\u0642 \u0627\u0644\u0627\u0633\u0645 \u0641\u064A \u0625\u0639\u062F\u0627\u062F\u0627\u062A \u0627\u0644\u0637\u0627\u0628\u0639\u0629 \u2014 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A: 80(72.1) x 297 mm" }), _jsx(TextField, { select: bridgePrinters.length > 0, fullWidth: true, label: "\u0627\u0633\u0645 \u0627\u0644\u0637\u0627\u0628\u0639\u0629", value: settings.printerName, onChange: (e) => patch({ printerName: e.target.value }), helperText: bridgeOk
+                                                ? (bridgePrinters.length
+                                                    ? `Print Bridge متصل — ${bridgePrinters.length} طابعة`
+                                                    : 'Print Bridge متصل — اكتب اسم الطابعة يدوياً')
+                                                : 'شغّل Print Bridge: npm run dev:print-bridge', children: bridgePrinters.map((p) => (_jsx(MenuItem, { value: p, children: p }, p))) })] }), _jsxs(Stack, { direction: "row", flexWrap: "wrap", gap: 1, sx: { mt: 3 }, children: [_jsx(Button, { variant: "contained", onClick: handleSave, children: "\u062D\u0641\u0638 \u0627\u0644\u0625\u0639\u062F\u0627\u062F\u0627\u062A" }), _jsx(Button, { variant: "outlined", onClick: handleReset, children: "\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0627\u0641\u062A\u0631\u0627\u0636\u064A" }), _jsx(Button, { variant: "outlined", onClick: handleTestPrint, disabled: !bridgeOk, children: "\u0637\u0628\u0627\u0639\u0629 \u0627\u062E\u062A\u0628\u0627\u0631" }), _jsx(Button, { component: RouterLink, to: "/pos", children: "\u0627\u0644\u0639\u0648\u062F\u0629 \u0644\u0646\u0642\u0637\u0629 \u0627\u0644\u0628\u064A\u0639" })] })] }) }), _jsx(Grid, { item: true, xs: 12, lg: 5, children: _jsxs(Paper, { sx: { p: 2, borderRadius: 3, position: { lg: 'sticky' }, top: 16 }, children: [_jsx(Typography, { variant: "h6", fontWeight: 800, gutterBottom: true, children: "\u0645\u0639\u0627\u064A\u0646\u0629 \u0645\u0628\u0627\u0634\u0631\u0629" }), _jsxs(Tabs, { value: previewTab, onChange: (_, v) => setPreviewTab(v), sx: { mb: 2 }, children: [_jsx(Tab, { value: "customer", label: "\u0641\u0627\u062A\u0648\u0631\u0629 \u0627\u0644\u0632\u0628\u0648\u0646" }), _jsx(Tab, { value: "kitchen", label: "\u0641\u0627\u062A\u0648\u0631\u0629 \u0627\u0644\u0645\u0637\u0628\u062E" })] }), _jsx(ReceiptPreview, { settings: settings, mode: previewTab })] }) })] })] }));
 }

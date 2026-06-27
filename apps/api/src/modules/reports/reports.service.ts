@@ -1,23 +1,27 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
+import { ReportsAnalyticsService } from './reports-analytics.service.js';
 
 @Injectable()
 export class ReportsService {
   constructor(
     private prisma: PrismaService,
     private treasuryService: TreasuryService,
+    private analytics: ReportsAnalyticsService,
   ) {}
 
   async dashboard(branchId: string) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const ordersToday = await this.prisma.order.findMany({
+    const ordersTodayAgg = await this.prisma.order.aggregate({
       where: { branchId, status: 'CLOSED', closedAt: { gte: today } },
+      _sum: { totalAmount: true },
+      _count: true,
     });
 
-    const salesToday = ordersToday.reduce((s, o) => s + Number(o.totalAmount), 0);
+    const salesToday = Number(ordersTodayAgg._sum.totalAmount ?? 0);
 
     const openShift = await this.prisma.shift.findFirst({
       where: { branchId, status: 'OPEN' },
@@ -53,7 +57,7 @@ export class ReportsService {
 
     return {
       salesToday,
-      ordersCountToday: ordersToday.length,
+      ordersCountToday: ordersTodayAgg._count,
       expectedCash,
       shiftOpen: !!openShift,
       lowStockCount: lowStock.length,
@@ -65,46 +69,37 @@ export class ReportsService {
   }
 
   async operations(branchId: string, from?: string, to?: string) {
-    const fromDate = from ? new Date(from) : new Date(new Date().setHours(0, 0, 0, 0));
     const toDate = to ? new Date(to) : new Date();
-
-    const orders = await this.prisma.order.findMany({
-      where: { branchId, status: 'CLOSED', closedAt: { gte: fromDate, lte: toDate } },
-      include: { createdBy: true, items: { include: { product: true } } },
-    });
-
-    const totalSales = orders.reduce((s, o) => s + Number(o.totalAmount), 0);
-
-    const cashierMap = new Map<string, { cashier: string; invoices: number; total: number }>();
-    for (const order of orders) {
-      const name = order.createdBy?.fullName ?? 'غير معروف';
-      const entry = cashierMap.get(name) ?? { cashier: name, invoices: 0, total: 0 };
-      entry.invoices += 1;
-      entry.total += Number(order.totalAmount);
-      cashierMap.set(name, entry);
+    if (!to) {
+      toDate.setHours(23, 59, 59, 999);
     }
+    const fromDate = from
+      ? new Date(from)
+      : new Date(toDate.getTime() - 90 * 24 * 60 * 60 * 1000);
 
-    const productMap = new Map<string, { name: string; quantity: number; revenue: number }>();
-    for (const order of orders) {
-      for (const item of order.items) {
-        const name = item.product?.name ?? 'صنف';
-        const entry = productMap.get(name) ?? { name, quantity: 0, revenue: 0 };
-        entry.quantity += Number(item.quantity);
-        entry.revenue += Number(item.lineTotal);
-        productMap.set(name, entry);
-      }
-    }
+    const [breakdown, shiftHistory] = await Promise.all([
+      this.analytics.getOperationsBreakdown(branchId, fromDate, toDate),
+      this.analytics.getShiftSalesHistory(branchId, fromDate, toDate),
+    ]);
 
-    const topItems = [...productMap.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 10);
+    const { orderCount, totalSales, salesByCashier, topSellingItems } = breakdown;
+    const shiftOrdersTotal = shiftHistory.reduce((s, sh) => s + sh.ordersCount, 0);
 
     return {
+      dataSource: 'historical',
+      dataSourceNote:
+        'سجل تاريخي من قاعدة البيانات — يشمل فواتير الورديات المغلقة حتى لو اختفت من شاشة نقطة البيع.',
       kpis: [
-        { label: 'إجمالي المبيعات', value: totalSales, note: `${orders.length} فاتورة مغلقة` },
-        { label: 'متوسط الفاتورة', value: orders.length ? totalSales / orders.length : 0, note: 'خلال الفترة المحددة' },
-        { label: 'عدد الفواتير', value: orders.length, note: 'فواتير مغلقة' },
+        { label: 'إجمالي المبيعات', value: totalSales, note: `${orderCount} فاتورة مغلقة` },
+        { label: 'متوسط الفاتورة', value: orderCount ? totalSales / orderCount : 0, note: 'آخر 90 يوم (افتراضي)' },
+        { label: 'ورديات مغلقة', value: shiftHistory.length, note: `${shiftOrdersTotal} فاتورة محفوظة` },
       ],
-      salesByCashier: [...cashierMap.values()],
-      topSellingItems: topItems,
+      salesByCashier,
+      topSellingItems,
+      shiftHistory,
+      ordersAnalyzed: orderCount,
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
     };
   }
 

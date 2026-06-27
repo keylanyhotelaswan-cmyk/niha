@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service.js';
 import { aggregateExpensesByPaymentMethod, aggregateShiftWalletTransfers, netCollectionByMethod } from '../shifts/shift-collection-net.js';
 import { TransferDto } from './dto/transfer.dto.js';
 import { CreateMovementDto } from './dto/create-movement.dto.js';
+import { uncollectedOrderWhere } from '../orders/order-collection.util.js';
 
 export type WorkspaceSection = 'current' | 'history' | 'treasury' | 'approvals';
 
@@ -1245,11 +1246,7 @@ export class TreasuryService {
       sourceType: true,
     } as const;
 
-    const uncollectedWhere = {
-      shiftId,
-      status: 'CLOSED' as const,
-      OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
-    };
+    const uncollectedWhere = uncollectedOrderWhere({ shiftId, status: 'CLOSED' });
 
     const [allTxRows, recentTransactionsRaw, expenseRows, walletTransferTxs, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
       this.prisma.treasuryTransaction.findMany({

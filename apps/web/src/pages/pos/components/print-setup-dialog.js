@@ -2,9 +2,11 @@ import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Stack, TextField, Typography, } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
-import { DEFAULT_PRINTER_NAME, getReceiptLayout, getReceiptSettings, kitchenFromReceipt, readSavedPrinterName, renderCustomerReceiptPng, renderKitchenReceiptPng, sampleReceiptData, savePrinterName, } from '../../../lib/pos-receipt.js';
+import { DEFAULT_PRINTER_NAME, getReceiptLayout, getReceiptSettings, readSavedPrinterName, sampleReceiptData, savePrinterName, } from '../../../lib/pos-receipt.js';
 import { bridgePrintEscPos, bridgePrintJobs, isPrintBridgeOnline, listBridgePrinters, } from '../../../lib/pos-print-bridge.js';
-import { pickEscPosBridgeSettings } from '../../../lib/pos-receipt-escpos.js';
+import { buildEscPosJobs, pickEscPosBridgeSettings } from '../../../lib/pos-receipt-escpos.js';
+import { kitchenFromReceipt } from '../../../lib/pos-receipt.js';
+import { renderCustomerReceiptPng, renderKitchenReceiptPng } from '../../../lib/pos-receipt-render.js';
 export function PrintSetupDialog({ open, onClose }) {
     const receiptSettings = getReceiptSettings();
     const layout = getReceiptLayout(receiptSettings);
@@ -51,21 +53,17 @@ export function PrintSetupDialog({ open, onClose }) {
         const receiptData = sampleReceiptData(settings);
         const copies = settings.printCopies;
         if (settings.printMode === 'escpos') {
-            const kitchen = kitchenFromReceipt(receiptData);
-            const imageJobs = [];
-            if (copies === 'kitchen' || copies === 'both') {
-                const kPng = await renderKitchenReceiptPng(kitchen, settings);
-                if (kPng)
-                    imageJobs.push({ pngBase64: kPng.base64 });
-            }
-            if (copies === 'customer' || copies === 'both') {
-                const cPng = await renderCustomerReceiptPng(receiptData, settings);
-                if (cPng)
-                    imageJobs.push({ pngBase64: cPng.base64 });
-            }
-            const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
+            const { printPosReceipt } = await import('../../../lib/pos-receipt.js');
+            const res = await printPosReceipt(receiptData, { force: true, silent: true, copies });
             const copyLabel = copies === 'both' ? 'شيف + زبون' : copies === 'kitchen' ? 'شيف' : 'زبون';
-            setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS — عربي صحيح).` : res.message);
+            setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS — عربي).` : res.message ?? 'فشل الطباعة');
+            setTesting(false);
+            return;
+        }
+        if (settings.printMode === 'escpos-text') {
+            const res = await bridgePrintEscPos(buildEscPosJobs(receiptData, copies), pickEscPosBridgeSettings());
+            const copyLabel = copies === 'both' ? 'شيف + زبون' : copies === 'kitchen' ? 'شيف' : 'زبون';
+            setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS نصي).` : res.message);
             setTesting(false);
             return;
         }

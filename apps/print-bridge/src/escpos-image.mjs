@@ -46,10 +46,10 @@ export async function printEscPosImageJobs(printerName, jobs, settings = {}) {
     const buffer = Buffer.from(b64, 'base64');
     printer.alignCenter();
     await printer.printImageBuffer(buffer);
-    printer.cut({ verticalTabAmount: 3 });
+    printer.cut({ verticalTabAmount: 1 });
     await printer.execute();
 
-    if (i < jobs.length - 1) await sleep(JOB_GAP_MS);
+    if (i < jobs.length - 1) await sleep(120);
   }
 
   return { printer: resolvedPrinter, count: jobs.length };

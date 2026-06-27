@@ -499,8 +499,8 @@ export function PosPage() {
       <PosKpiGrid
         shiftOpen={workspace.shiftOpen}
         posSummary={workspace.displayPosSummary}
-        uncollectedCount={workspace.uncollectedOrders.length}
-        uncollectedAmount={workspace.uncollectedAmount}
+        uncollectedCount={workspace.displayUncollectedCount}
+        uncollectedAmount={workspace.displayUncollectedAmount}
         suspendedCount={workspace.suspendedOrders.length}
         shiftNumber={workspace.shift?.shiftNumber}
         cashierName={workspace.shiftOperatorName}
@@ -560,6 +560,11 @@ export function PosPage() {
         hasMoreCollected={workspace.hasMoreCollected}
         collectedLoadingMore={workspace.collectedLoadingMore}
         onLoadMoreCollected={() => workspace.fetchNextCollectedPage?.()}
+        hasMoreUncollected={workspace.hasMoreUncollected}
+        uncollectedLoadingMore={workspace.uncollectedLoadingMore}
+        onLoadMoreUncollected={() => workspace.fetchNextUncollectedPage?.()}
+        totalUncollectedCount={workspace.displayUncollectedCount}
+        totalCollectedCount={workspace.displayCollectedCount}
       />
 
       <Fab

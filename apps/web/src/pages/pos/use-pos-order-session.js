@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiCreateOpenOrder, apiPlaceOrder, apiAmendOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
-import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, refetchPosOrderData } from '../../lib/hooks.js';
+import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, POS_QUERY_KEYS, refetchPosOrderData } from '../../lib/hooks.js';
 import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
 import { isAutoPrintEnabled, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
 import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, } from '../../lib/pos-store.js';
@@ -294,7 +294,7 @@ export function usePosOrderSession(workspace, catalog) {
                 catalog.onNotify?.(res.body ?? res.error ?? 'فشل إغلاق الطلب');
                 void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftIdForRefresh] });
                 void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftIdForRefresh] });
-                void refetchPosOrderData(queryClient, shiftIdForRefresh);
+                void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh) });
                 return;
             }
             const apiOrder = res.data;
@@ -303,7 +303,9 @@ export function usePosOrderSession(workspace, catalog) {
             if (shiftIdForRefresh && apiOrder?.id) {
                 patchShiftOrderAdded(queryClient, shiftIdForRefresh, apiOrder);
             }
-            void refetchPosOrderData(queryClient, shiftIdForRefresh);
+            void queryClient.invalidateQueries({
+                queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh),
+            });
         })();
         return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
     };
@@ -380,7 +382,9 @@ export function usePosOrderSession(workspace, catalog) {
                 if (shiftIdForRefresh && res.data) {
                     patchShiftOrderUpdated(queryClient, shiftIdForRefresh, orderId, res.data);
                 }
-                void refetchPosOrderData(queryClient, shiftIdForRefresh);
+                void queryClient.invalidateQueries({
+                    queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh),
+                });
             }
             else {
                 catalog.onNotify?.(res.body

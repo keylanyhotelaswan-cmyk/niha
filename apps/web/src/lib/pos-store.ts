@@ -42,6 +42,18 @@ export function isShiftOrderUncollected(order: SavedOrder) {
   return order.collectionStatus === 'uncollected' || order.paymentStatus === 'PENDING';
 }
 
+/** نفس تعريف الـ API — للطلبات الخام قبل التحويل */
+export function isApiOrderUncollected(order: {
+  collectionStatus?: string;
+  paymentStatus?: string;
+}) {
+  return (
+    order.collectionStatus === 'UNCOLLECTED'
+    || order.collectionStatus === 'uncollected'
+    || order.paymentStatus === 'PENDING'
+  );
+}
+
 /** محصّل أو بانتظار اعتماد الإدارة */
 export function isShiftOrderCollected(order: SavedOrder) {
   return order.collectionStatus === 'approved' || order.collectionStatus === 'pending_approval';

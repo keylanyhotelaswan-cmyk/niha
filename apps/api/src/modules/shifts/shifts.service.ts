@@ -14,6 +14,11 @@ import {
   aggregateShiftWalletTransfers,
   netCollectionByMethod,
 } from './shift-collection-net.js';
+import {
+  isUncollectedOrder,
+  uncollectedOrderOrWhere,
+  uncollectedOrderWhere,
+} from '../orders/order-collection.util.js';
 
 const SHIFT_WALLET_METHOD_LABELS: Record<string, string> = {
   CASH: 'نقدي',
@@ -462,6 +467,8 @@ export class ShiftsService {
           expectedCash: summary.expectedCash,
           countedCash: closeDto.countedCash,
           varianceAmount: closeDto.countedCash - summary.expectedCash,
+          ordersCount: summary.ordersCount ?? 0,
+          totalSales: summary.totalSales ?? 0,
           note: handoffNote,
         },
       });
@@ -602,11 +609,7 @@ export class ShiftsService {
   }
 
   private async countTransferableOrders(shiftId: string) {
-    const uncollectedWhere = {
-      shiftId,
-      status: 'CLOSED' as const,
-      OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
-    };
+    const uncollectedWhere = uncollectedOrderWhere({ shiftId, status: 'CLOSED' });
     const [uncollectedCount, suspendedCount, openCount] = await Promise.all([
       this.prisma.order.count({ where: uncollectedWhere }),
       this.prisma.order.count({ where: { shiftId, status: 'SUSPENDED' } }),
@@ -659,7 +662,7 @@ export class ShiftsService {
         { status: 'OPEN' },
         {
           status: 'CLOSED',
-          OR: [{ collectionStatus: 'UNCOLLECTED' }, { paymentStatus: 'PENDING' }],
+          ...uncollectedOrderOrWhere,
         },
       ],
     };
@@ -826,11 +829,7 @@ export class ShiftsService {
     };
 
     if (!includeOrders) {
-      const uncollectedWhere = {
-        shiftId,
-        status: 'CLOSED' as const,
-        OR: [{ collectionStatus: 'UNCOLLECTED' as const }, { paymentStatus: 'PENDING' as const }],
-      };
+      const uncollectedWhere = uncollectedOrderWhere({ shiftId, status: 'CLOSED' });
       const [ordersCount, salesAgg, uncollectedAgg, uncollectedOrdersRaw, suspendedCount] = await Promise.all([
         this.prisma.order.count({ where: { shiftId, status: 'CLOSED' } }),
         this.prisma.order.aggregate({
@@ -907,9 +906,6 @@ export class ShiftsService {
       });
       orders.push(...extraOrders);
     }
-
-    const isUncollectedOrder = (order: { collectionStatus: string; paymentStatus: string }) =>
-      order.collectionStatus === 'UNCOLLECTED' || order.paymentStatus === 'PENDING';
 
     let ordersCount = 0;
     let salesTotal = 0;

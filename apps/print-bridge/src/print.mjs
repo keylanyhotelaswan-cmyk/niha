@@ -52,6 +52,14 @@ export async function resolvePrinterName(requested) {
   const byBase = printers.find((p) => p.toLowerCase().startsWith(base) || base.startsWith(p.toLowerCase()));
   if (byBase) return byBase;
 
+  // XP-K200L غالباً يظهر في Windows كـ XP-80 / XP-80C
+  if (/xp-?k?200/i.test(name)) {
+    const k200 = printers.find((p) => /xp-?k?200/i.test(p));
+    if (k200) return k200;
+    const xp80 = printers.find((p) => /xp-?80/i.test(p));
+    if (xp80) return xp80;
+  }
+
   const xp = printers.find((p) => /xp-?k?200/i.test(p));
   if (xp && /xp-?k?200/i.test(name)) return xp;
 

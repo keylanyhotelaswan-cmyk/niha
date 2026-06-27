@@ -101,7 +101,7 @@ export function buildReceiptCss(settings, renderWidthPx) {
   .pay-status-paid{font-weight:900}
   .pay-status-unpaid{font-weight:900}
 
-  .foot{text-align:center;font-size:${fs(settings.fontBody - 1)}px;line-height:1.45;margin-top:6px;color:#111;word-wrap:break-word}
+  .foot{text-align:center;font-size:${fs(settings.fontBody - 1)}px;line-height:1.35;margin-top:4px;color:#111;word-wrap:break-word}
   .foot-phone{font-weight:800;font-size:${fs(settings.fontBody + 1)}px;margin-top:4px;direction:ltr}
 
   @media print{
@@ -229,7 +229,7 @@ export function buildCustomerReceiptHtml(data, settings = getReceiptSettings(), 
       <footer class="foot">
         ${data.storeFooter ? `<div>${escapeHtml(data.storeFooter)}</div>` : ''}
         ${data.storePhone ? `<div class="foot-phone">${escapeHtml(data.storePhone)}</div>` : ''}
-        <div style="margin-top:6px">شكراً لزيارتكم</div>
+        <div style="margin-top:2px">شكراً لزيارتكم</div>
       </footer>
     </div></div>`;
     return wrapReceiptDocument(body, settings, forPrint);
@@ -258,6 +258,15 @@ export function buildKitchenReceiptHtml(data, settings = getReceiptSettings(), f
     </div></div>`;
     return wrapReceiptDocument(body, settings, forPrint);
 }
+function measureReceiptHeight(root) {
+    const rootTop = root.getBoundingClientRect().top;
+    let contentBottom = 0;
+    root.querySelectorAll('.k-item, .items tr, .total-box, .pay-box, .foot').forEach((el) => {
+        const r = el.getBoundingClientRect();
+        contentBottom = Math.max(contentBottom, r.bottom - rootTop);
+    });
+    return Math.ceil(Math.max(root.scrollHeight, root.offsetHeight, root.getBoundingClientRect().height, contentBottom + 12, 80));
+}
 function normalizeCanvasToWidth(source, targetWidth) {
     if (source.width === targetWidth)
         return source;
@@ -273,6 +282,16 @@ function normalizeCanvasToWidth(source, targetWidth) {
     ctx.imageSmoothingEnabled = source.width > targetWidth;
     ctx.drawImage(source, 0, 0, targetWidth, targetHeight);
     return out;
+}
+async function yieldBeforeHeavyWork() {
+    const scheduler = globalThis.scheduler;
+    if (scheduler?.yield) {
+        await scheduler.yield();
+        return;
+    }
+    await new Promise((resolve) => {
+        requestAnimationFrame(() => setTimeout(resolve, 16));
+    });
 }
 export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings()) {
     const cssWidthPx = getReceiptCssWidthPx(settings.paperWidthMm);
@@ -293,11 +312,11 @@ export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings())
     await new Promise((resolve) => {
         const done = () => resolve();
         if (iframe.contentWindow?.document?.readyState === 'complete') {
-            requestAnimationFrame(() => setTimeout(done, 80));
+            requestAnimationFrame(() => setTimeout(done, 60));
             return;
         }
-        iframe.onload = () => requestAnimationFrame(() => setTimeout(done, 80));
-        setTimeout(done, 200);
+        iframe.onload = () => requestAnimationFrame(() => setTimeout(done, 60));
+        setTimeout(done, 180);
     });
     const slipEl = doc.querySelector('.slip');
     const target = slipEl ?? doc.querySelector('.receipt') ?? doc.body;
@@ -305,18 +324,28 @@ export async function renderHtmlToPng(fullHtml, settings = getReceiptSettings())
         document.body.removeChild(iframe);
         return null;
     }
-    const contentHeight = Math.max(target.scrollHeight, target.offsetHeight, 120);
-    const heightPad = 48;
+    const heightPad = 32;
+    let contentHeight = measureReceiptHeight(target);
     iframe.style.height = `${contentHeight + heightPad}px`;
-    const captureScale = 1;
+    await new Promise((resolve) => {
+        requestAnimationFrame(() => setTimeout(resolve, 80));
+    });
+    contentHeight = measureReceiptHeight(target);
+    const captureHeight = contentHeight + heightPad;
+    iframe.style.height = `${captureHeight}px`;
+    await new Promise((resolve) => {
+        requestAnimationFrame(() => setTimeout(resolve, 40));
+    });
+    await yieldBeforeHeavyWork();
+    const captureScale = 1.5;
     try {
         const rawCanvas = await capture(target, {
             backgroundColor: '#ffffff',
             scale: captureScale,
             width: cssWidthPx,
             windowWidth: cssWidthPx,
-            height: contentHeight + heightPad,
-            windowHeight: contentHeight + heightPad,
+            height: captureHeight,
+            windowHeight: captureHeight,
             scrollX: 0,
             scrollY: 0,
             useCORS: true,

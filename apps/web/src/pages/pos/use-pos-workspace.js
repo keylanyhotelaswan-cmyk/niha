@@ -57,7 +57,7 @@ export function usePosWorkspace() {
         }
         : null);
     const displayPosSummary = posSummary ?? closeShiftSummary;
-    const { data: uncollectedPage, isPending: uncollectedPending, isError: uncollectedError, refetch: refetchUncollected, } = useShiftUncollectedOrders(effectiveShiftId);
+    const { data: uncollectedPages, isPending: uncollectedPending, isError: uncollectedError, refetch: refetchUncollected, fetchNextPage: fetchNextUncollectedPage, hasNextPage: hasMoreUncollected, isFetchingNextPage: uncollectedLoadingMore, } = useShiftUncollectedOrders(effectiveShiftId);
     const { data: collectedPages, isPending: collectedPending, isError: collectedError, refetch: refetchCollected, fetchNextPage, hasNextPage, isFetchingNextPage, } = useShiftCollectedOrders(effectiveShiftId);
     const shiftOrdersPending = uncollectedPending && collectedPending;
     const shiftOrdersError = uncollectedError || collectedError;
@@ -103,14 +103,14 @@ export function usePosWorkspace() {
     }, [cashBoxes, selectedCashBoxId]);
     const suspendedOrders = useMemo(() => apiSuspended.map((o) => mapApiOrderToSavedOrder(o, 'suspended')), [apiSuspended]);
     const shiftClosedOrdersSource = useMemo(() => {
-        const uncollected = uncollectedPage?.orders ?? [];
+        const uncollected = uncollectedPages?.pages.flatMap((p) => p.orders) ?? [];
         const collected = collectedPages?.pages.flatMap((p) => p.orders) ?? [];
         if (uncollected.length > 0 || collected.length > 0) {
             return [...uncollected, ...collected];
         }
         const fromSummary = posSummary?.shiftClosedOrders ?? posContext?.posSummary?.shiftClosedOrders;
         return fromSummary ?? [];
-    }, [uncollectedPage, collectedPages, posSummary, posContext]);
+    }, [uncollectedPages, collectedPages, posSummary, posContext]);
     const shiftClosedOrders = useMemo(() => {
         const seen = new Set();
         return shiftClosedOrdersSource
@@ -126,6 +126,14 @@ export function usePosWorkspace() {
     const uncollectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderUncollected(o)), [shiftClosedOrders]);
     const collectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderCollected(o)), [shiftClosedOrders]);
     const uncollectedAmount = useMemo(() => uncollectedOrders.reduce((s, o) => s + o.total, 0), [uncollectedOrders]);
+    const displayUncollectedCount = displayPosSummary?.uncollectedCount
+        ?? uncollectedOrders.length;
+    const displayUncollectedAmount = displayPosSummary?.uncollectedTotal
+        ?? uncollectedAmount;
+    const summaryOrdersCount = displayPosSummary?.ordersCount;
+    const displayCollectedCount = summaryOrdersCount != null && displayPosSummary?.uncollectedCount != null
+        ? summaryOrdersCount - displayPosSummary.uncollectedCount
+        : collectedOrders.length;
     const resolvedBranchId = posContext?.branch?.id || branchId || branchList[0]?.id;
     const resolvedCashBoxId = posContext?.cashBox?.id || selectedCashBoxId || cashBoxes[0]?.id;
     const contextReady = Boolean(resolvedBranchId && resolvedCashBoxId);
@@ -333,6 +341,9 @@ export function usePosWorkspace() {
         uncollectedOrders,
         collectedOrders,
         uncollectedAmount,
+        displayUncollectedCount,
+        displayUncollectedAmount,
+        displayCollectedCount,
         operatorName,
         shiftOperatorName,
         resolvedBranchId,
@@ -351,6 +362,9 @@ export function usePosWorkspace() {
         fetchNextCollectedPage: fetchNextPage,
         hasMoreCollected: hasNextPage,
         collectedLoadingMore: isFetchingNextPage,
+        fetchNextUncollectedPage,
+        hasMoreUncollected,
+        uncollectedLoadingMore,
         refetchPosContext,
         refetchSuspended,
     };

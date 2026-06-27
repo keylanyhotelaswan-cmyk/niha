@@ -1,7 +1,7 @@
 const queue = [];
 let processing = false;
 let preloadStarted = false;
-/** Preload receipt renderer + print bridge while shift is open */
+/** Preload print pipeline (صورة ESC/POS للعربي) */
 export function preloadPosPrintPipeline() {
     if (preloadStarted)
         return;
@@ -11,9 +11,9 @@ export function preloadPosPrintPipeline() {
     void import('./pos-print-bridge.js');
     void import('./pos-receipt-escpos.js');
 }
-function yieldToUi() {
+function yieldToUi(ms = 32) {
     return new Promise((resolve) => {
-        setTimeout(resolve, 0);
+        setTimeout(resolve, ms);
     });
 }
 export function enqueuePosPrint(data, options = {}, onResult) {

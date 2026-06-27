@@ -11,7 +11,7 @@ const queue: PrintJob[] = [];
 let processing = false;
 let preloadStarted = false;
 
-/** Preload receipt renderer + print bridge while shift is open */
+/** Preload print pipeline (صورة ESC/POS للعربي) */
 export function preloadPosPrintPipeline(): void {
   if (preloadStarted) return;
   preloadStarted = true;
@@ -21,9 +21,9 @@ export function preloadPosPrintPipeline(): void {
   void import('./pos-receipt-escpos.js');
 }
 
-function yieldToUi(): Promise<void> {
+function yieldToUi(ms = 32): Promise<void> {
   return new Promise((resolve) => {
-    setTimeout(resolve, 0);
+    setTimeout(resolve, ms);
   });
 }
 

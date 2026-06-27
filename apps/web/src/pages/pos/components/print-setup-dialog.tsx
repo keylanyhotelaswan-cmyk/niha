@@ -16,10 +16,7 @@ import {
   DEFAULT_PRINTER_NAME,
   getReceiptLayout,
   getReceiptSettings,
-  kitchenFromReceipt,
   readSavedPrinterName,
-  renderCustomerReceiptPng,
-  renderKitchenReceiptPng,
   sampleReceiptData,
   savePrinterName,
 } from '../../../lib/pos-receipt.js';
@@ -29,7 +26,9 @@ import {
   isPrintBridgeOnline,
   listBridgePrinters,
 } from '../../../lib/pos-print-bridge.js';
-import { pickEscPosBridgeSettings } from '../../../lib/pos-receipt-escpos.js';
+import { buildEscPosJobs, pickEscPosBridgeSettings } from '../../../lib/pos-receipt-escpos.js';
+import { kitchenFromReceipt } from '../../../lib/pos-receipt.js';
+import { renderCustomerReceiptPng, renderKitchenReceiptPng } from '../../../lib/pos-receipt-render.js';
 
 type PrintSetupDialogProps = {
   open: boolean;
@@ -84,19 +83,21 @@ export function PrintSetupDialog({ open, onClose }: PrintSetupDialogProps) {
     const copies = settings.printCopies;
 
     if (settings.printMode === 'escpos') {
-      const kitchen = kitchenFromReceipt(receiptData);
-      const imageJobs: { pngBase64: string }[] = [];
-      if (copies === 'kitchen' || copies === 'both') {
-        const kPng = await renderKitchenReceiptPng(kitchen, settings);
-        if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
-      }
-      if (copies === 'customer' || copies === 'both') {
-        const cPng = await renderCustomerReceiptPng(receiptData, settings);
-        if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
-      }
-      const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
+      const { printPosReceipt } = await import('../../../lib/pos-receipt.js');
+      const res = await printPosReceipt(receiptData, { force: true, silent: true, copies });
       const copyLabel = copies === 'both' ? 'شيف + زبون' : copies === 'kitchen' ? 'شيف' : 'زبون';
-      setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS — عربي صحيح).` : res.message);
+      setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS — عربي).` : res.message ?? 'فشل الطباعة');
+      setTesting(false);
+      return;
+    }
+
+    if (settings.printMode === 'escpos-text') {
+      const res = await bridgePrintEscPos(
+        buildEscPosJobs(receiptData, copies),
+        pickEscPosBridgeSettings(),
+      );
+      const copyLabel = copies === 'both' ? 'شيف + زبون' : copies === 'kitchen' ? 'شيف' : 'زبون';
+      setTestMsg(res.ok ? `تمت طباعة ${copyLabel} (ESC/POS نصي).` : res.message);
       setTesting(false);
       return;
     }

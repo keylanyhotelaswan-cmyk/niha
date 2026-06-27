@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient, keepPreviousData, useInfiniteQue
 import { apiCloseShift, apiGetCustomer, apiListCustomers, apiListOrdersByShift } from './api.js';
 import { apiGet, apiPost, parseApiErrorBody } from './api-client.js';
 import { useAuth } from './auth-context.js';
+import { isApiOrderUncollected } from './pos-store.js';
 import { readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
 
 function token(accessToken: string | null | undefined) {
@@ -78,19 +79,27 @@ export function patchShiftOrderUpdated(
   const merge = (orders: any[]) =>
     orders.map((order) => (order.id === orderId ? { ...order, ...patch } : order));
 
-  patchUncollectedList(queryClient, shiftId, merge);
+  patchUncollectedPages(queryClient, shiftId, merge);
   patchCollectedPages(queryClient, shiftId, merge);
 }
 
-function patchUncollectedList(
+function patchUncollectedPages(
   queryClient: ReturnType<typeof useQueryClient>,
   shiftId: string,
   updater: (orders: any[]) => any[],
 ) {
-  queryClient.setQueryData<ShiftOrdersPage>(POS_QUERY_KEYS.shiftUncollected(shiftId), (old) => {
-    if (!old) return old;
-    return { ...old, orders: updater(old.orders ?? []) };
-  });
+  queryClient.setQueryData<{ pages: ShiftOrdersPage[]; pageParams: unknown[] }>(
+    POS_QUERY_KEYS.shiftUncollected(shiftId),
+    (old) => {
+      if (!old?.pages?.length) return old;
+      return {
+        ...old,
+        pages: old.pages.map((page, i) =>
+          i === 0 ? { ...page, orders: updater(page.orders ?? []) } : page,
+        ),
+      };
+    },
+  );
 }
 
 function patchCollectedPages(
@@ -117,10 +126,9 @@ export function patchShiftOrderAdded(
   shiftId: string,
   order: Record<string, unknown>,
 ) {
-  const isUncollected =
-    order.collectionStatus === 'UNCOLLECTED' || order.paymentStatus === 'PENDING';
+  const isUncollected = isApiOrderUncollected(order);
   if (isUncollected) {
-    patchUncollectedList(queryClient, shiftId, (orders) => {
+    patchUncollectedPages(queryClient, shiftId, (orders) => {
       if (orders.some((o) => o.id === order.id)) return orders;
       return [order, ...orders];
     });
@@ -148,7 +156,7 @@ export function patchShiftOrderUncollected(
     ? { ...orderSnapshot, collectionStatus: 'UNCOLLECTED', paymentStatus: 'PENDING' }
     : moved;
   if (uncollectedOrder) {
-    patchUncollectedList(queryClient, shiftId, (orders) => {
+    patchUncollectedPages(queryClient, shiftId, (orders) => {
       if (orders.some((o) => o.id === orderId)) {
         return orders.map((order) =>
           order.id === orderId
@@ -168,7 +176,7 @@ export function patchShiftOrderCollected(
   orderSnapshot?: Record<string, unknown>,
 ) {
   let moved: Record<string, unknown> | null = null;
-  patchUncollectedList(queryClient, shiftId, (orders) => {
+  patchUncollectedPages(queryClient, shiftId, (orders) => {
     const found = orders.find((o) => o.id === orderId);
     if (found) moved = { ...found, collectionStatus: 'PENDING_APPROVAL', paymentStatus: 'PAID' };
     return orders.filter((order) => order.id !== orderId);
@@ -195,7 +203,7 @@ export function patchShiftOrderRemoved(
   shiftId: string,
   orderId: string,
 ) {
-  patchUncollectedList(queryClient, shiftId, (orders) =>
+  patchUncollectedPages(queryClient, shiftId, (orders) =>
     orders.filter((order) => order.id !== orderId),
   );
   patchCollectedPages(queryClient, shiftId, (orders) =>
@@ -293,13 +301,23 @@ export function usePosCatalog(branchId?: string) {
 
 export function useShiftUncollectedOrders(shiftId?: string) {
   const { accessToken } = useAuth();
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: POS_QUERY_KEYS.shiftUncollected(shiftId),
-    queryFn: async () => {
-      const res = await apiListOrdersByShift(shiftId!, { filter: 'uncollected' }, token(accessToken));
+    queryFn: async ({ pageParam }) => {
+      const res = await apiListOrdersByShift(
+        shiftId!,
+        {
+          filter: 'uncollected',
+          take: 25,
+          ...(pageParam ? { cursor: String(pageParam) } : {}),
+        },
+        token(accessToken),
+      );
       if (!res.ok) throw new Error(res.body ?? res.error);
       return res.data ?? { orders: [], nextCursor: null };
     },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     enabled: !!accessToken && !!shiftId,
     staleTime: 60000,
     refetchOnWindowFocus: false,
@@ -336,7 +354,7 @@ export function useShiftClosedOrders(shiftId?: string) {
   const uncollected = useShiftUncollectedOrders(shiftId);
   const collected = useShiftCollectedOrders(shiftId);
   const orders = [
-    ...(uncollected.data?.orders ?? []),
+    ...(uncollected.data?.pages.flatMap((p) => p.orders) ?? []),
     ...(collected.data?.pages.flatMap((p) => p.orders) ?? []),
   ];
   return {
@@ -434,18 +452,80 @@ export function useSetupCategories() {
   });
 }
 
-export function useReport(group: string, branchId?: string, shiftId?: string) {
+export type ReportDateRange = { from: string; to: string };
+
+function appendReportRange(params: URLSearchParams, range?: ReportDateRange) {
+  if (range?.from) params.set('from', `${range.from}T00:00:00.000`);
+  if (range?.to) params.set('to', `${range.to}T23:59:59.999`);
+}
+
+export function useReport(group: string, branchId?: string, opts?: { shiftId?: string; range?: ReportDateRange }) {
   const { accessToken } = useAuth();
+  const shiftId = opts?.shiftId;
+  const range = opts?.range;
   return useQuery({
-    queryKey: ['report', group, branchId, shiftId],
+    queryKey: ['report', group, branchId, shiftId, range?.from, range?.to],
     queryFn: async () => {
       const params = new URLSearchParams({ branchId: branchId! });
       if (shiftId) params.set('shiftId', shiftId);
+      appendReportRange(params, range);
       const res = await apiGet<any>(`/reports/${group}?${params}`, token(accessToken));
       if (!res.ok) throw new Error(res.body ?? res.error);
       return res.data;
     },
     enabled: !!accessToken && !!branchId && !!group,
+  });
+}
+
+export function useProductDayMatrix(branchId?: string, range?: ReportDateRange) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['report', 'product-day-matrix', branchId, range?.from, range?.to],
+    queryFn: async () => {
+      const params = new URLSearchParams({ branchId: branchId! });
+      appendReportRange(params, range);
+      const res = await apiGet<any>(`/reports/product-day-matrix?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 300000,
+    retry: false,
+  });
+}
+
+export function useWeekOverWeek(branchId?: string, weeks = 8) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['report', 'week-over-week', branchId, weeks],
+    queryFn: async () => {
+      const res = await apiGet<any>(
+        `/reports/week-over-week?branchId=${branchId}&weeks=${weeks}`,
+        token(accessToken),
+      );
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 300000,
+    retry: false,
+  });
+}
+
+export function useBundleSuggestions(branchId?: string, range?: ReportDateRange) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['report', 'bundle-suggestions', branchId, range?.from, range?.to],
+    queryFn: async () => {
+      const params = new URLSearchParams({ branchId: branchId! });
+      appendReportRange(params, range);
+      const res = await apiGet<any>(`/reports/bundle-suggestions?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 3600000,
+    retry: false,
   });
 }
 

@@ -1,6 +1,6 @@
 export const RECEIPT_SETTINGS_KEY = 'niha-receipt-settings';
 export const RECEIPT_SETTINGS_EVENT = 'niha-receipt-settings-changed';
-export const RECEIPT_SETTINGS_VERSION = 7;
+export const RECEIPT_SETTINGS_VERSION = 8;
 export const RECEIPT_DPI = 203;
 /** عرض CSS ثابت لورق 80mm — يمنع تكبير html2canvas إلى ~639px */
 export const RECEIPT_CSS_WIDTH_PX = 280;
@@ -33,7 +33,8 @@ export type ReceiptPaperOrientation = 'portrait' | 'landscape';
 
 export type DeliveryDriver = { name: string; phone?: string };
 
-export type ReceiptPrintMode = 'escpos' | 'png';
+/** escpos = صورة raster (عربي) | escpos-text = نص خام (بدون عربي) | png = PDF */
+export type ReceiptPrintMode = 'escpos' | 'escpos-text' | 'png';
 
 export type ReceiptSettings = {
   storeName: string;
@@ -103,7 +104,10 @@ export function normalizeReceiptSettings(raw: Partial<ReceiptSettings> | null | 
     fontKitchenNum: clamp(Number(r.fontKitchenNum ?? d.fontKitchenNum) || d.fontKitchenNum, 24, 96),
     fontKitchenItem: clamp(Number(r.fontKitchenItem ?? d.fontKitchenItem) || d.fontKitchenItem, 12, 36),
     printCopies: r.printCopies === 'kitchen' || r.printCopies === 'customer' ? r.printCopies : 'both',
-    printMode: r.printMode === 'png' ? 'png' : 'escpos',
+    printMode:
+      r.printMode === 'png' ? 'png'
+      : r.printMode === 'escpos-text' ? 'escpos-text'
+      : 'escpos',
     autoPrint: r.autoPrint ?? d.autoPrint,
     cashierPrintingEnabled: r.cashierPrintingEnabled ?? d.cashierPrintingEnabled,
     printerName: String(r.printerName ?? d.printerName).trim() || d.printerName,

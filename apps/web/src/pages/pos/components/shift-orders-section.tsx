@@ -29,6 +29,11 @@ type ShiftOrdersSectionProps = {
   hasMoreCollected?: boolean;
   collectedLoadingMore?: boolean;
   onLoadMoreCollected?: () => void;
+  hasMoreUncollected?: boolean;
+  uncollectedLoadingMore?: boolean;
+  onLoadMoreUncollected?: () => void;
+  totalUncollectedCount?: number;
+  totalCollectedCount?: number;
 };
 
 function buildCardProps(
@@ -68,22 +73,25 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
   }, [props.tab]);
 
   const loadedPages = Math.max(1, Math.ceil(visible.length / ORDERS_PAGE_SIZE));
-  const showMorePagesHint = props.tab === 'collected' && props.hasMoreCollected;
+  const hasMoreRemote = props.tab === 'uncollected' ? props.hasMoreUncollected : props.hasMoreCollected;
+  const loadingMore = props.tab === 'uncollected' ? props.uncollectedLoadingMore : props.collectedLoadingMore;
+  const onLoadMore = props.tab === 'uncollected' ? props.onLoadMoreUncollected : props.onLoadMoreCollected;
+  const showMorePagesHint = Boolean(hasMoreRemote);
   const totalPages = showMorePagesHint ? loadedPages + 1 : loadedPages;
 
   useEffect(() => {
-    if (page > loadedPages && page < totalPages && props.tab === 'collected') {
-      if (props.hasMoreCollected && !props.collectedLoadingMore) {
-        props.onLoadMoreCollected?.();
+    if (page > loadedPages && page < totalPages) {
+      if (hasMoreRemote && !loadingMore) {
+        onLoadMore?.();
       }
     }
-  }, [page, loadedPages, totalPages, props.tab, props.hasMoreCollected, props.collectedLoadingMore, props.onLoadMoreCollected]);
+  }, [page, loadedPages, totalPages, hasMoreRemote, loadingMore, onLoadMore]);
 
   useEffect(() => {
-    if (page > loadedPages && !props.hasMoreCollected) {
+    if (page > loadedPages && !hasMoreRemote) {
       setPage(loadedPages);
     }
-  }, [page, loadedPages, props.hasMoreCollected]);
+  }, [page, loadedPages, hasMoreRemote]);
 
   const pageItems = useMemo(() => {
     const start = (page - 1) * ORDERS_PAGE_SIZE;
@@ -105,8 +113,8 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
         onChange={(_, v) => props.onTabChange(v)}
         sx={{ mb: 1.5, minHeight: 40, '& .MuiTab-root': { minHeight: 40, fontWeight: 700 } }}
       >
-        <Tab value="uncollected" label={`غير محصل (${props.uncollected.length})`} />
-        <Tab value="collected" label={`محصل (${props.collected.length}${props.hasMoreCollected ? '+' : ''})`} />
+        <Tab value="uncollected" label={`غير محصل (${props.totalUncollectedCount ?? props.uncollected.length}${props.hasMoreUncollected ? '+' : ''})`} />
+        <Tab value="collected" label={`محصل (${props.totalCollectedCount ?? props.collected.length}${props.hasMoreCollected ? '+' : ''})`} />
       </Tabs>
 
       {!props.shiftOpen && totalCount === 0 ? (
@@ -142,7 +150,7 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
             ))}
           </Grid2>
 
-          {props.collectedLoadingMore && page > loadedPages ? (
+          {(props.collectedLoadingMore || props.uncollectedLoadingMore) && page > loadedPages ? (
             <Alert severity="info" sx={{ mt: 1.5, borderRadius: 2 }}>جاري تحميل الصفحة…</Alert>
           ) : null}
 
@@ -156,7 +164,7 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
                 shape="rounded"
                 siblingCount={1}
                 boundaryCount={1}
-                disabled={Boolean(props.collectedLoadingMore && page > loadedPages)}
+                disabled={Boolean(loadingMore && page > loadedPages)}
               />
             </Stack>
           ) : null}

@@ -231,6 +231,56 @@ function pngJobFromPayload(payload: PrintPayload) {
   };
 }
 
+/** طباعة ESC/POS صورة — عربي واضح على XPrinter */
+async function printEscPosImageJobs(
+  data: ReceiptData,
+  copies: PrintCopies,
+  settings: ReceiptSettings,
+): Promise<PrintReceiptResult> {
+  const {
+    renderCustomerReceiptPng,
+    renderKitchenReceiptPng,
+  } = await import('./pos-receipt-render.js');
+  const { bridgePrintEscPos } = await import('./pos-print-bridge.js');
+  const { pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
+
+  const kitchen = kitchenFromReceipt(data);
+  const needKitchen = copies === 'kitchen' || copies === 'both';
+  const needCustomer = copies === 'customer' || copies === 'both';
+  const kPng = needKitchen ? await renderKitchenReceiptPng(kitchen, settings) : null;
+  const cPng = needCustomer ? await renderCustomerReceiptPng(data, settings) : null;
+
+  const imageJobs: { pngBase64: string }[] = [];
+  if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
+  if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
+  if (!imageJobs.length) {
+    return { ok: false, message: 'فشل تجهيز صورة الفاتورة للطباعة' };
+  }
+
+  const escposResult = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
+  if (escposResult.ok) {
+    return { ok: true, method: 'escpos', printer: escposResult.printer, copies };
+  }
+  return { ok: false, message: escposResult.message, reason: escposResult.reason };
+}
+
+/** طباعة ESC/POS نص — سريع لكن العربي قد يظهر رموز على بعض الطابعات */
+async function printEscPosTextJobs(
+  data: ReceiptData,
+  copies: PrintCopies,
+): Promise<PrintReceiptResult> {
+  const { bridgePrintEscPos } = await import('./pos-print-bridge.js');
+  const { buildEscPosJobs, pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
+  const escposResult = await bridgePrintEscPos(
+    buildEscPosJobs(data, copies),
+    pickEscPosBridgeSettings(),
+  );
+  if (escposResult.ok) {
+    return { ok: true, method: 'escpos', printer: escposResult.printer, copies };
+  }
+  return { ok: false, message: escposResult.message, reason: escposResult.reason };
+}
+
 export async function printPosReceipt(
   data: ReceiptData,
   options?: { force?: boolean; silent?: boolean; copies?: PrintCopies },
@@ -245,35 +295,21 @@ export async function printPosReceipt(
   const needCustomer = copies === 'customer' || copies === 'both';
 
   if (silent && settings.printMode === 'escpos') {
-    const {
-      renderCustomerReceiptPng,
-      renderKitchenReceiptPng,
-    } = await import('./pos-receipt-render.js');
-    const { bridgePrintEscPos } = await import('./pos-print-bridge.js');
-    const { pickEscPosBridgeSettings } = await import('./pos-receipt-escpos.js');
-
-    const kitchen = kitchenFromReceipt(data);
-    const [kPng, cPng] = await Promise.all([
-      needKitchen ? renderKitchenReceiptPng(kitchen, settings) : Promise.resolve(null),
-      needCustomer ? renderCustomerReceiptPng(data, settings) : Promise.resolve(null),
-    ]);
-
-    const imageJobs: { pngBase64: string }[] = [];
-    if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
-    if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
-
-    const escposResult = await bridgePrintEscPos(
-      imageJobs,
-      pickEscPosBridgeSettings(),
-    );
-    if (escposResult.ok) {
-      return { ok: true, method: 'escpos', printer: escposResult.printer, copies };
+    const imageResult = await printEscPosImageJobs(data, copies, settings);
+    if (imageResult.ok) return imageResult;
+    if (imageResult.reason === 'bridge-offline') {
+      return imageResult;
     }
-    if (escposResult.reason !== 'bridge-offline') {
-      console.warn('[pos-print] ESC/POS image failed, falling back to PNG/PDF:', escposResult.message);
-    } else {
-      return { ok: false, message: escposResult.message, reason: escposResult.reason };
+    console.warn('[pos-print] ESC/POS image failed, falling back to PDF/PNG:', imageResult.message);
+  }
+
+  if (silent && settings.printMode === 'escpos-text') {
+    const textResult = await printEscPosTextJobs(data, copies);
+    if (textResult.ok) return textResult;
+    if (textResult.reason === 'bridge-offline') {
+      return textResult;
     }
+    console.warn('[pos-print] ESC/POS text failed, falling back to PNG:', textResult.message);
   }
 
   const payloads: PrintPayload[] = [];
@@ -287,10 +323,8 @@ export async function printPosReceipt(
 
   const kitchen = kitchenFromReceipt(data);
 
-  const [kPng, cPng] = await Promise.all([
-    needKitchen ? renderKitchenReceiptPng(kitchen) : Promise.resolve(null),
-    needCustomer ? renderCustomerReceiptPng(data) : Promise.resolve(null),
-  ]);
+  const kPng = needKitchen ? await renderKitchenReceiptPng(kitchen) : null;
+  const cPng = needCustomer ? await renderCustomerReceiptPng(data) : null;
 
   if (needKitchen) {
     payloads.push({

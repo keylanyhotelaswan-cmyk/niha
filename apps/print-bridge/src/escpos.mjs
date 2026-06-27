@@ -12,9 +12,52 @@ function line(width = 42) {
   return '-'.repeat(width);
 }
 
-function formatMoney(value) {
+function moneyPlain(value) {
   const n = Number(value) || 0;
-  return `${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ج.م`;
+  return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function formatMoney(value) {
+  return `${moneyPlain(value)} ج.م`;
+}
+
+function printTableRow(printer, cols) {
+  if (typeof printer.tableCustom === 'function') {
+    printer.tableCustom(cols);
+    return;
+  }
+  const text = cols.map((c) => c.text).join('  ');
+  printer.println(text);
+}
+
+function printCustomerItems(printer, items, width) {
+  printer.bold(true);
+  printTableRow(printer, [
+    { text: 'الصنف', align: 'RIGHT', width: 0.52 },
+    { text: 'كم', align: 'CENTER', width: 0.12 },
+    { text: 'المبلغ', align: 'LEFT', width: 0.36 },
+  ]);
+  printer.bold(false);
+  printer.println(line(width));
+
+  for (const item of items ?? []) {
+    const total = item.lineTotal ?? item.unitPrice * item.quantity;
+    const note = item.note?.trim();
+    const label = note ? `${item.name} (${note})` : item.name;
+    try {
+      printTableRow(printer, [
+        { text: label, align: 'RIGHT', width: 0.52 },
+        { text: String(item.quantity), align: 'CENTER', width: 0.12 },
+        { text: moneyPlain(total), align: 'LEFT', width: 0.36 },
+      ]);
+    } catch {
+      printer.alignRight();
+      printer.println(`${item.quantity}× ${label}`);
+      printer.alignLeft();
+      printer.println(formatMoney(total));
+      printer.alignRight();
+    }
+  }
 }
 
 function shouldShowOrderType(orderType) {
@@ -61,7 +104,7 @@ async function createPrinter(printerName, settings = {}) {
 }
 
 async function flushPrinter(printer) {
-  printer.cut({ verticalTabAmount: 3 });
+  printer.cut({ verticalTabAmount: 1 });
   await printer.execute();
 }
 
@@ -144,27 +187,44 @@ async function printCustomerSlip(printer, data, settings, width) {
   printer.alignCenter();
   printer.println(line(width));
 
-  printer.alignRight();
-  for (const item of data.items ?? []) {
-    const total = item.lineTotal ?? item.unitPrice * item.quantity;
-    printer.println(`${item.quantity}× ${item.name}`);
-    printer.alignLeft();
-    printer.println(formatMoney(total));
-    printer.alignRight();
+  printCustomerItems(printer, data.items, width);
+
+  printer.println(line(width));
+
+  const subtotal = Number(data.subtotal ?? data.total) || 0;
+  const discount = Number(data.discount) || 0;
+  if (discount > 0) {
+    printTableRow(printer, [
+      { text: 'قبل الخصم', align: 'RIGHT', width: 0.6 },
+      { text: moneyPlain(subtotal), align: 'LEFT', width: 0.4 },
+    ]);
+    printTableRow(printer, [
+      { text: 'خصم', align: 'RIGHT', width: 0.6 },
+      { text: moneyPlain(discount), align: 'LEFT', width: 0.4 },
+    ]);
   }
 
-  printer.alignCenter();
-  printer.println(line(width));
-  printer.alignRight();
-  if (Number(data.discount) > 0) {
-    printer.println(`خصم: ${formatMoney(data.discount)}`);
-  }
   printer.bold(true);
-  printer.println(`الإجمالي: ${formatMoney(data.total)}`);
+  printTableRow(printer, [
+    { text: 'الإجمالي', align: 'RIGHT', width: 0.6 },
+    { text: formatMoney(data.total), align: 'LEFT', width: 0.4 },
+  ]);
   printer.bold(false);
-  printer.println(`الحالة: ${formatPaymentStatus(paid)}`);
-  printer.println(`الدفع: ${data.paymentMethod ?? '—'}`);
-  if (data.note?.trim()) printer.println(`ملاحظة: ${data.note.trim()}`);
+
+  printTableRow(printer, [
+    { text: 'الحالة', align: 'RIGHT', width: 0.6 },
+    { text: formatPaymentStatus(paid), align: 'LEFT', width: 0.4 },
+  ]);
+  printTableRow(printer, [
+    { text: 'الدفع', align: 'RIGHT', width: 0.6 },
+    { text: String(data.paymentMethod ?? '—'), align: 'LEFT', width: 0.4 },
+  ]);
+  if (data.note?.trim()) {
+    printTableRow(printer, [
+      { text: 'ملاحظة', align: 'RIGHT', width: 0.35 },
+      { text: data.note.trim(), align: 'LEFT', width: 0.65 },
+    ]);
+  }
 
   printer.alignCenter();
   printer.println(line(width));

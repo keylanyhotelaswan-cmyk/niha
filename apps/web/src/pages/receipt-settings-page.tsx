@@ -40,8 +40,9 @@ import {
   bridgePrintEscPos,
   bridgePrintJobs,
   isPrintBridgeOnline,
+  listBridgePrinters,
 } from '../lib/pos-print-bridge.js';
-import { pickEscPosBridgeSettings } from '../lib/pos-receipt-escpos.js';
+import { pickEscPosBridgeSettings, buildEscPosJobs } from '../lib/pos-receipt-escpos.js';
 
 function ReceiptPreview({ settings, mode }: { settings: ReceiptSettings; mode: 'customer' | 'kitchen' }) {
   const html = useMemo(() => {
@@ -91,6 +92,7 @@ export function ReceiptSettingsPage() {
   const [savedMsg, setSavedMsg] = useState('');
   const [printMsg, setPrintMsg] = useState('');
   const [bridgeOk, setBridgeOk] = useState(false);
+  const [bridgePrinters, setBridgePrinters] = useState<string[]>([]);
 
   const layout = useMemo(() => receiptLayoutFromSettings(settings), [settings]);
 
@@ -99,7 +101,23 @@ export function ReceiptSettingsPage() {
   }, []);
 
   useEffect(() => {
-    isPrintBridgeOnline().then(setBridgeOk);
+    void (async () => {
+      const online = await isPrintBridgeOnline();
+      setBridgeOk(online);
+      if (!online) {
+        setBridgePrinters([]);
+        return;
+      }
+      const list = await listBridgePrinters();
+      setBridgePrinters(list);
+      if (list.length && !list.includes(settings.printerName)) {
+        const guess =
+          list.find((p) => /xp-?k?200/i.test(p))
+          ?? list.find((p) => /xp-?80/i.test(p))
+          ?? list[0];
+        if (guess) patch({ printerName: guess });
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -145,19 +163,18 @@ export function ReceiptSettingsPage() {
     const sample = sampleReceiptData(saved);
 
     if (saved.printMode === 'escpos') {
-      const kitchen = kitchenFromReceipt(sample);
-      const { renderCustomerReceiptPng, renderKitchenReceiptPng } = await import('../lib/pos-receipt-render.js');
-      const imageJobs: { pngBase64: string }[] = [];
-      if (saved.printCopies === 'kitchen' || saved.printCopies === 'both') {
-        const kPng = await renderKitchenReceiptPng(kitchen, saved);
-        if (kPng) imageJobs.push({ pngBase64: kPng.base64 });
-      }
-      if (saved.printCopies === 'customer' || saved.printCopies === 'both') {
-        const cPng = await renderCustomerReceiptPng(sample, saved);
-        if (cPng) imageJobs.push({ pngBase64: cPng.base64 });
-      }
-      const res = await bridgePrintEscPos(imageJobs, pickEscPosBridgeSettings());
-      setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS — عربي صحيح).' : res.message);
+      const { printPosReceipt } = await import('../lib/pos-receipt.js');
+      const res = await printPosReceipt(sample, { force: true, silent: true, copies: saved.printCopies });
+      setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS — عربي صحيح).' : res.message ?? 'فشل الطباعة');
+      return;
+    }
+
+    if (saved.printMode === 'escpos-text') {
+      const res = await bridgePrintEscPos(
+        buildEscPosJobs(sample, saved.printCopies),
+        pickEscPosBridgeSettings(),
+      );
+      setPrintMsg(res.ok ? 'تمت طباعة الاختبار (ESC/POS نصي).' : res.message);
       return;
     }
 
@@ -336,10 +353,11 @@ export function ReceiptSettingsPage() {
                 label="طريقة الطباعة"
                 value={settings.printMode}
                 onChange={(e) => patch({ printMode: e.target.value as ReceiptSettings['printMode'] })}
-                helperText="يطبّع الفاتورة كصورة عبر USB مباشرة — عربي صحيح وسريع (موصى به لـ XP-K200L)"
+                helperText="ESC/POS صورة = عربي واضح على XPrinter (موصى به). النصي = سريع لكن العربي قد يظهر رموز."
               >
-                <MenuItem value="escpos">ESC/POS مباشر (عربي صحيح — XP-K200L)</MenuItem>
-                <MenuItem value="png">PDF/صورة (أبطأ — احتياطي)</MenuItem>
+                <MenuItem value="escpos">ESC/POS صورة (عربي — موصى به)</MenuItem>
+                <MenuItem value="escpos-text">ESC/POS نصي (سريع — بدون عربي)</MenuItem>
+                <MenuItem value="png">PDF/صورة (احتياطي)</MenuItem>
               </TextField>
               <TextField
                 select
@@ -368,12 +386,23 @@ export function ReceiptSettingsPage() {
                 helperText="يجب أن يطابق الاسم في إعدادات الطابعة — الافتراضي: 80(72.1) x 297 mm"
               />
               <TextField
+                select={bridgePrinters.length > 0}
                 fullWidth
                 label="اسم الطابعة"
                 value={settings.printerName}
                 onChange={(e) => patch({ printerName: e.target.value })}
-                helperText={bridgeOk ? 'Print Bridge متصل' : 'شغّل Print Bridge للطباعة الصامتة'}
-              />
+                helperText={
+                  bridgeOk
+                    ? (bridgePrinters.length
+                      ? `Print Bridge متصل — ${bridgePrinters.length} طابعة`
+                      : 'Print Bridge متصل — اكتب اسم الطابعة يدوياً')
+                    : 'شغّل Print Bridge: npm run dev:print-bridge'
+                }
+              >
+                {bridgePrinters.map((p) => (
+                  <MenuItem key={p} value={p}>{p}</MenuItem>
+                ))}
+              </TextField>
             </Stack>
 
             <Stack direction="row" flexWrap="wrap" gap={1} sx={{ mt: 3 }}>
