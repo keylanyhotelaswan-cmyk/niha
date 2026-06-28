@@ -5,6 +5,12 @@ export function localTodayKey(d = new Date()) {
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
 }
+/** أول يوم في الشهر الحالي — YYYY-MM-DD */
+export function localMonthStartKey(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    return `${y}-${m}-01`;
+}
 export function isTodayKey(dateKey) {
     return dateKey === localTodayKey();
 }

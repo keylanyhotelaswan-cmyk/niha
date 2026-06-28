@@ -67,9 +67,9 @@ export function SetupCostsPage() {
   const categoryNames = categories.map((c: any) => c.name);
 
   const setupStats = [
-    { label: 'إجمالي التأسيس', value: `${totals.contracted.toLocaleString('en-US')} ج.م`, note: 'قيمة البنود ضمن الفلاتر الحالية', progress: 100, tone: '#be123c' },
-    { label: 'المسدّد', value: `${totals.paid.toLocaleString('en-US')} ج.م`, note: 'دفعات فعلية مسجلة', progress: totals.contracted === 0 ? 0 : Math.round((totals.paid / totals.contracted) * 100), tone: '#0f766e' },
-    { label: 'المتبقي', value: `${remaining.toLocaleString('en-US')} ج.م`, note: 'التزامات لم تسدد بعد', progress: totals.contracted === 0 ? 0 : Math.round((remaining / totals.contracted) * 100), tone: '#b45309' },
+    { label: 'إجمالي التأسيس', value: `${totals.contracted.toLocaleString('en-US')} ج.م`, note: 'قيمة البنود ضمن الفلاتر الحالية', progress: 100, tone: 'warning' },
+    { label: 'المسدّد', value: `${totals.paid.toLocaleString('en-US')} ج.م`, note: 'دفعات فعلية مسجلة', progress: totals.contracted === 0 ? 0 : Math.round((totals.paid / totals.contracted) * 100), tone: 'success' },
+    { label: 'المتبقي', value: `${remaining.toLocaleString('en-US')} ج.م`, note: 'التزامات لم تسدد بعد', progress: totals.contracted === 0 ? 0 : Math.round((remaining / totals.contracted) * 100), tone: 'primary' },
   ];
 
   return (

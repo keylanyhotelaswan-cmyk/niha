@@ -1,12 +1,6 @@
 :root {
-  color: #2f1f18;
-  background:
-    radial-gradient(circle at top right, rgba(185, 56, 23, 0.18), transparent 24%),
-    radial-gradient(circle at 12% 12%, rgba(217, 119, 6, 0.12), transparent 18%),
-    radial-gradient(circle at bottom left, rgba(47, 31, 24, 0.10), transparent 28%),
-    linear-gradient(180deg, #f6ecdf 0%, #f2e4d3 100%);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
+  color: #2C3330;
+  background: #FFFFFF;
 }
 
 html {
@@ -17,9 +11,7 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(255, 247, 237, 0.58), rgba(244, 234, 220, 0.96)),
-    repeating-linear-gradient(135deg, rgba(255,255,255,0.18) 0, rgba(255,255,255,0.18) 8px, rgba(255,255,255,0) 8px, rgba(255,255,255,0) 22px);
+  background: #FFFFFF;
 }
 
 * {
@@ -28,17 +20,6 @@ body {
 
 #root {
   min-height: 100vh;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(circle at 20% 10%, rgba(255,255,255,0.28), transparent 18%),
-    radial-gradient(circle at 80% 15%, rgba(185, 56, 23, 0.08), transparent 20%),
-    radial-gradient(circle at 85% 85%, rgba(217, 119, 6, 0.08), transparent 18%);
 }
 
 button,

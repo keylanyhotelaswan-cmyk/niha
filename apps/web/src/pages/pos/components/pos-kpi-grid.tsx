@@ -2,6 +2,9 @@ import { Button, Grid2, Paper, Stack, Typography } from '@mui/material';
 import { formatCurrency } from '../utils.js';
 import { ShiftCollectionBreakdown } from '../../treasury-workspace/components/shift-collection-breakdown.js';
 import { formatShiftDuration, shiftCollectionRows } from '../../../lib/shift-summary-utils.js';
+import { MetricCard } from '../../shared.js';
+import { cardSx } from '../../../lib/ui-tokens.js';
+import type { MetricTone } from '../../../lib/ui-tokens.js';
 
 type KpiGridProps = {
   shiftOpen: boolean;
@@ -27,46 +30,46 @@ export function PosKpiGrid({
   const cashRow = shiftOpen && posSummary ? shiftCollectionRows(posSummary).find((r) => r.method === 'CASH') : null;
   const cashCollected = cashRow?.total ?? 0;
 
-  const stats = [
+  const stats: Array<{ label: string; value: string; note?: string; tone: MetricTone }> = [
     {
       label: 'مبيعات الوردية',
       value: shiftOpen && posSummary ? formatCurrency(posSummary.salesTotal ?? posSummary.totalSales ?? 0) : '—',
-      tone: '#0f766e',
       note: shiftOpen && posSummary ? `${posSummary.ordersCount ?? 0} طلب مغلق` : 'لا وردية نشطة',
+      tone: 'primary',
     },
     {
       label: 'تحصيل نقدي',
       value: shiftOpen && posSummary ? formatCurrency(cashCollected) : '—',
-      tone: '#1d4ed8',
       note: cashRow && cashRow.pending > 0 ? `معلق ${formatCurrency(cashRow.pending)}` : 'إيصالات نقدية',
+      tone: 'success',
     },
     {
       label: 'لم يُحصّل بعد',
       value: shiftOpen ? formatCurrency(uncollectedAmount) : '—',
-      tone: '#d97706',
-      note: shiftOpen ? `${uncollectedCount} طلب في الدرج` : undefined,
+      tone: uncollectedCount > 0 ? 'warning' : 'default',
+      ...(shiftOpen ? { note: `${uncollectedCount} طلب في الدرج` } : {}),
     },
     {
       label: 'مصروفات الوردية',
       value: shiftOpen && posSummary ? formatCurrency(posSummary.expensesTotal ?? 0) : '—',
-      tone: '#b45309',
       note: shiftOpen && posSummary
         ? `عام ${formatCurrency(posSummary.expensesGeneral ?? 0)} · خامات ${formatCurrency(posSummary.expensesItems ?? 0)}`
         : 'تُخصم من عهدة الكاشير',
+      tone: 'info',
     },
     {
       label: 'عهدة الكاشير',
       value: shiftOpen && posSummary ? formatCurrency(posSummary.expectedCash ?? 0) : '—',
-      tone: '#7c3aed',
-      note: shiftOpen && posSummary
-        ? `فتح ${formatCurrency(posSummary.openingFloat ?? 0)}${openedAt ? ` · ${formatShiftDuration(openedAt)}` : ''}`
-        : undefined,
+      tone: 'default',
+      ...(shiftOpen && posSummary
+        ? { note: `فتح ${formatCurrency(posSummary.openingFloat ?? 0)}${openedAt ? ` · ${formatShiftDuration(openedAt)}` : ''}` }
+        : {}),
     },
     {
       label: 'طلبات معلّقة',
       value: String(suspendedCount),
-      tone: '#be123c',
       note: 'سلة غير مكتملة',
+      tone: suspendedCount > 0 ? 'warning' : 'default',
     },
   ];
 
@@ -75,17 +78,13 @@ export function PosKpiGrid({
       <Grid2 container spacing={1.5}>
         {stats.map((stat) => (
           <Grid2 key={stat.label} size={{ xs: 6, md: 4, lg: 2 }}>
-            <Paper elevation={0} sx={{ p: 1.75, borderRadius: 4, border: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.95)' }}>
-              <Typography variant="caption" color="text.secondary">{stat.label}</Typography>
-              <Typography variant="h5" fontWeight={800} sx={{ color: stat.tone }}>{stat.value}</Typography>
-              {stat.note ? <Typography variant="caption" color="text.secondary">{stat.note}</Typography> : null}
-            </Paper>
+            <MetricCard label={stat.label} value={stat.value} {...(stat.note ? { note: stat.note } : {})} tone={stat.tone} />
           </Grid2>
         ))}
       </Grid2>
 
       {shiftOpen && posSummary ? (
-        <Paper elevation={0} sx={{ p: 2, borderRadius: 4, border: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.95)' }}>
+        <Paper elevation={0} sx={{ ...cardSx, p: 2 }}>
           <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
             <Typography variant="subtitle2" fontWeight={800}>تحصيل الوردية (من الفتح حتى الآن)</Typography>
             {onOpenSummaryPreview ? (

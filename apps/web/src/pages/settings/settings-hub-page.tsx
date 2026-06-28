@@ -10,6 +10,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context.js';
 import { getReceiptSettings } from '../../lib/pos-receipt-settings.js';
 import { localTodayKey } from '../../lib/date-utils.js';
+import { cardSx } from '../../lib/ui-tokens.js';
 
 type SettingsCard = {
   title: string;
@@ -32,6 +33,13 @@ export function SettingsHubPage() {
       path: `/shifts?from=${localTodayKey()}&to=${localTodayKey()}`,
       permission: 'treasury.manage',
       meta: `اليوم · ${localTodayKey()}`,
+    },
+    {
+      title: 'دليل الألوان والثيم',
+      description: 'مرجع بصري للألوان، الأزرار، التبويبات، وبطاقات KPI — للتحقق من التناسق.',
+      path: '/settings/theme',
+      permission: 'treasury.manage',
+      meta: 'Buffet · أبيض + بنفسجي',
     },
     {
       title: 'الفاتورة والطباعة',
@@ -77,10 +85,9 @@ export function SettingsHubPage() {
           <Grid item xs={12} md={6} key={card.path}>
             <Paper
               sx={{
+                ...cardSx,
                 p: 2.5,
                 height: '100%',
-                borderRadius: 3,
-                border: '1px solid rgba(185, 56, 23, 0.12)',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 1.5,

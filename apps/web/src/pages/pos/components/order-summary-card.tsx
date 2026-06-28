@@ -5,6 +5,7 @@ import { collectionTone, formatCurrency } from '../utils.js';
 import { ReprintMenuButton } from './reprint-menu-button.js';
 import { OrderStatusActions } from './order-status-actions.js';
 import type { PrintCopies } from '../../../lib/pos-receipt.js';
+import { cardSx, ui } from '../../../lib/ui-tokens.js';
 
 type OrderSummaryCardProps = {
   order: SavedOrder;
@@ -26,19 +27,16 @@ type OrderSummaryCardProps = {
 export const OrderSummaryCard = memo(function OrderSummaryCard({ order, variant, onAction, actionLabel, onReprint, onViewAudit, onViewSummary, onEdit, showReprint, onUncollect, onCancel, onRequestCancel, onWithdrawCancel, actionBusy }: OrderSummaryCardProps) {
   const cancelPending = Boolean(order.cancelRequestedAt);
   const tone = collectionTone(order.collectionStatus, cancelPending);
-  const accent = variant === 'suspended' ? '#d97706' : '#0f766e';
+  const accent = variant === 'suspended' ? ui.warn : ui.navy;
 
   return (
     <Card
       elevation={0}
       sx={{
-        borderRadius: 4,
-        border: `1px solid ${variant === 'suspended' ? 'rgba(217,119,6,0.22)' : 'rgba(15,118,110,0.18)'}`,
-        background: variant === 'suspended'
-          ? 'linear-gradient(145deg, rgba(255,251,246,1), rgba(254,243,199,0.45))'
-          : 'linear-gradient(145deg, rgba(255,251,246,1), rgba(204,251,241,0.35))',
-        transition: 'transform 0.15s ease, box-shadow 0.15s ease',
-        '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 12px 28px rgba(47,31,24,0.08)' },
+        ...cardSx,
+        borderLeft: `3px solid ${accent}`,
+        transition: 'border-color 0.15s ease',
+        '&:hover': { borderColor: ui.borderStrong },
       }}
     >
       <CardContent sx={{ p: 2 }}>
@@ -60,7 +58,7 @@ export const OrderSummaryCard = memo(function OrderSummaryCard({ order, variant,
                 {order.ownerName || 'بدون اسم'} · {order.orderType === 'eat-in' ? 'صالة' : 'تيك أواي'}
               </Typography>
               {order.orderType === 'takeaway' ? (
-                <Chip size="small" label="تيك أواي" sx={{ mt: 0.5, fontWeight: 700, bgcolor: 'rgba(185,28,28,0.10)', color: '#b91c1c' }} />
+                <Chip size="small" label="تيك أواي" variant="outlined" sx={{ mt: 0.5 }} />
               ) : null}
               {order.customerPhone ? (
                 <Typography variant="caption" color="text.secondary" display="block">هاتف: {order.customerPhone}</Typography>

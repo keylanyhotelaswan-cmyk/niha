@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { SectionCard, MetricCard } from './shared.js';
+import { cardSx, ui } from '../lib/ui-tokens.js';
 import { useAuth } from '../lib/auth-context.js';
 import { useBranches } from '../lib/hooks.js';
 
@@ -237,10 +238,10 @@ export function CatalogPage() {
   };
 
   const stats = useMemo(() => [
-    { label: 'إجمالي الفئات', value: String(categories.length), note: 'فئات المنيو', progress: 100, tone: '#1d4ed8' },
-    { label: 'إجمالي المنتجات', value: String(products.length), note: 'صنف في المنيو', progress: products.length > 0 ? 72 : 0, tone: '#0f766e' },
-    { label: 'متوسط السعر', value: products.length > 0 ? `${(products.reduce((s: number, p: any) => s + p.salePrice, 0) / products.length).toFixed(0)} ج.م` : '—', note: 'متوسط أسعار البيع', progress: 60, tone: '#7c3aed' },
-    { label: 'غير متاح', value: String(products.filter((p: any) => !p.isAvailable).length), note: 'منتجات غير متاحة للبيع', progress: 30, tone: '#b91c1c' },
+    { label: 'إجمالي الفئات', value: String(categories.length), note: 'فئات المنيو', progress: 100, tone: 'info' },
+    { label: 'إجمالي المنتجات', value: String(products.length), note: 'صنف في المنيو', progress: products.length > 0 ? 72 : 0, tone: 'success' },
+    { label: 'متوسط السعر', value: products.length > 0 ? `${(products.reduce((s: number, p: any) => s + p.salePrice, 0) / products.length).toFixed(0)} ج.م` : '—', note: 'متوسط أسعار البيع', progress: 60, tone: 'primary' },
+    { label: 'غير متاح', value: String(products.filter((p: any) => !p.isAvailable).length), note: 'منتجات غير متاحة للبيع', progress: 30, tone: 'warning' },
   ], [categories, products]);
 
   return (
@@ -263,7 +264,7 @@ export function CatalogPage() {
         description="إدارة تصنيفات المنيو"
         action={<Button variant="contained" onClick={() => setCategoryDialog(true)}>إضافة فئة</Button>}
       >
-        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -317,7 +318,7 @@ export function CatalogPage() {
           </Stack>
         }
       >
-        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
           <Table size="small">
               <TableHead>
                 <TableRow>
@@ -439,7 +440,7 @@ export function CatalogPage() {
             </Grid2>
 
             {/* Recipe Linking Section */}
-            <Paper elevation={0} sx={{ p: 2, borderRadius: 3, bgcolor: 'rgba(15,118,110,0.06)', border: '1px solid rgba(15,118,110,0.18)' }}>
+            <Paper elevation={0} sx={{ p: 2, borderRadius: 3, bgcolor: ui.successBg, border: `1px solid ${ui.successBorder}` }}>
               <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.5 }}>
                 🔗 ربط الوصفة (لخصم المخزون تلقائياً عند البيع)
               </Typography>

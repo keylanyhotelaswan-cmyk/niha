@@ -45,6 +45,7 @@ import { ShiftOrdersSection } from './components/shift-orders-section.js';
 import { SuspendedSection } from './components/suspended-section.js';
 import { usePosCatalog } from './use-pos-catalog.js';
 import { usePosOrderSession } from './use-pos-order-session.js';
+import { PageToolbar } from '../../components/page-toolbar.js';
 import { usePosExpenseStock, usePosWorkspace } from './use-pos-workspace.js';
 import { formatCurrency } from './utils.js';
 import { localTodayKey } from '../../lib/date-utils.js';
@@ -400,101 +401,65 @@ export function PosPage() {
         </Alert>
       ) : null}
 
-      <Paper
-        elevation={0}
-        sx={{
-          p: { xs: 2, md: 2.5 },
-          borderRadius: 5,
-          color: '#fff7ed',
-          background: 'linear-gradient(135deg, #2f1f24 0%, #5a2718 45%, #b93817 100%)',
-          position: 'relative',
-          overflow: 'hidden',
-        }}
-      >
-        <Box sx={{ position: 'absolute', inset: 0, background: 'radial-gradient(circle at 80% 20%, rgba(255,255,255,0.12), transparent 40%)' }} />
-        <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} gap={2} sx={{ position: 'relative' }}>
-          <Box>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-              <Typography variant="h5" fontWeight={800}>نقطة البيع</Typography>
-              {window.electronAPI?.isDesktop ? (
-                <Chip
-                  label={desktopVersion ? `Niha Desktop v${desktopVersion}` : 'Niha Desktop'}
-                  size="small"
-                  sx={{ bgcolor: 'rgba(255,247,237,0.18)', color: '#fff7ed', fontWeight: 700 }}
-                />
-              ) : null}
-              {desktopUpdateLabel ? (
-                <Chip label={desktopUpdateLabel} size="small" color="warning" sx={{ fontWeight: 700 }} />
-              ) : null}
-              <Typography variant="caption" sx={{ bgcolor: shiftLikelyOpen ? 'rgba(34,197,94,0.25)' : workspace.shiftStatusPending ? 'rgba(251,191,36,0.35)' : 'rgba(239,68,68,0.25)', px: 1, py: 0.25, borderRadius: 2, fontWeight: 700 }}>
-                {shiftChipLabel}
-              </Typography>
-            </Stack>
-            <Typography variant="body2" sx={{ opacity: 0.88, mt: 0.5 }}>{shiftStatusText}</Typography>
-            <Typography variant="caption" sx={{ opacity: 0.75 }}>
+      <PageToolbar
+        title="نقطة البيع"
+        subtitle={shiftStatusText}
+        meta={
+          <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+            {window.electronAPI?.isDesktop ? (
+              <Chip label={desktopVersion ? `Desktop v${desktopVersion}` : 'Desktop'} size="small" variant="outlined" />
+            ) : null}
+            {desktopUpdateLabel ? <Chip label={desktopUpdateLabel} size="small" variant="outlined" /> : null}
+            <Chip label={shiftChipLabel} size="small" variant="outlined" />
+            <Typography variant="caption" color="text.secondary">
               {workspace.posContext?.branch?.name ?? '—'} · {workspace.posContext?.cashBox?.name ?? '—'}
             </Typography>
-          </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+          </Stack>
+        }
+        actions={
+          <>
             {canUsePrint ? (
-              <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setPrintSetupOpen(true)}>
-                طابعة
-              </Button>
+              <Button variant="outlined" size="small" onClick={() => setPrintSetupOpen(true)}>طابعة</Button>
             ) : null}
             {canManagePrint ? (
-              <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => navigate('/settings/receipt')}>
-                إعدادات الفاتورة
-              </Button>
+              <Button variant="outlined" size="small" onClick={() => navigate('/settings/receipt')}>الفاتورة</Button>
             ) : null}
             {canOpenShiftWorkspace && workspace.shiftOpen ? (
-              <Button
-                variant="outlined"
-                size="small"
-                sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }}
-                onClick={() => navigate('/shifts')}
-              >
-                {canManagePrint ? 'الخزنة والورديات' : 'ورديتي المفتوحة'}
+              <Button variant="outlined" size="small" onClick={() => navigate('/shifts')}>
+                {canManagePrint ? 'الخزنة' : 'ورديتي'}
               </Button>
             ) : null}
             {workspace.shiftOpen && workspace.displayPosSummary ? (
-              <Button
-                variant="outlined"
-                size="small"
-                sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }}
-                onClick={openShiftSummaryPreview}
-              >
-                ملخص الوردية
-              </Button>
+              <Button variant="outlined" size="small" onClick={openShiftSummaryPreview}>ملخص الوردية</Button>
             ) : null}
             {canManagePrint ? (
-              <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => order.toggleAutoPrint(!order.autoPrint)}>
-                طباعة تلقائية: {order.autoPrint ? 'مفعّلة' : 'معطّلة'}
+              <Button variant="outlined" size="small" onClick={() => order.toggleAutoPrint(!order.autoPrint)}>
+                طباعة: {order.autoPrint ? 'مفعّلة' : 'معطّلة'}
               </Button>
             ) : null}
             {workspace.shiftOpen ? (
               <>
-                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setProductionPlanOpen(true)}>خطة الإنتاج</Button>
-                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setExpenseOpen(true)}>مصروف</Button>
-                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setTransferOpen(true)}>تحويل</Button>
-                <Button variant="outlined" size="small" sx={{ color: '#fff7ed', borderColor: 'rgba(255,247,237,0.4)' }} onClick={() => setShiftCloseDialog(true)}>
+                <Button variant="outlined" size="small" onClick={() => setProductionPlanOpen(true)}>خطة الإنتاج</Button>
+                <Button variant="outlined" size="small" onClick={() => setExpenseOpen(true)}>مصروف</Button>
+                <Button variant="outlined" size="small" onClick={() => setTransferOpen(true)}>تحويل</Button>
+                <Button variant="outlined" size="small" onClick={() => setShiftCloseDialog(true)}>
                   {(workspace.uncollectedOrders?.length ?? 0) + (workspace.posSummary?.suspendedCount ?? 0) > 0 ? 'تسليم وردية' : 'إغلاق وردية'}
                 </Button>
               </>
             ) : (
-              <Button variant="contained" size="small" sx={{ bgcolor: '#fff7ed', color: '#5a2718', fontWeight: 800 }} onClick={() => setShiftOpenDialog(true)}>فتح وردية</Button>
+              <Button variant="contained" size="small" onClick={() => setShiftOpenDialog(true)}>فتح وردية</Button>
             )}
             <Button
               variant="contained"
-              size="large"
+              size="medium"
               disabled={!shiftLikelyOpen}
               onClick={() => { if (ensureShift()) order.openNewOrder(); }}
-              sx={{ bgcolor: '#fff7ed', color: '#5a2718', fontWeight: 800, px: 3 }}
             >
               + طلب جديد
             </Button>
-          </Stack>
-        </Stack>
-      </Paper>
+          </>
+        }
+      />
 
       <PosKpiGrid
         shiftOpen={workspace.shiftOpen}

@@ -24,6 +24,8 @@ import {
 import { formatShiftDuration, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
 import { isCashierTreasuryView, canManageTreasury, hasPermission } from '../../lib/permissions.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
+import { PageToolbar } from '../../components/page-toolbar.js';
+import { cardSx, tabsSx } from '../../lib/ui-tokens.js';
 import { CurrentShiftTab } from './tabs/current-shift-tab.js';
 import { ApprovalsTab } from './tabs/approvals-tab.js';
 import { TreasuryTab } from './tabs/treasury-tab.js';
@@ -115,16 +117,14 @@ export function TreasuryWorkspacePage() {
 
   return (
     <Stack spacing={2.5}>
-      <Paper elevation={0} sx={{ p: 2.5, borderRadius: 5, background: 'linear-gradient(135deg, #2f1f24, #5a2718)', color: '#fff7ed' }}>
-        <Typography variant="h5" fontWeight={800}>
-          {cashierView ? 'ورديتي المفتوحة' : 'الخزنة والورديات'}
-        </Typography>
-        <Typography variant="body2" sx={{ opacity: 0.85, mt: 0.5 }}>
-          {cashierView
+      <PageToolbar
+        title={cashierView ? 'ورديتي المفتوحة' : 'الخزنة والورديات'}
+        subtitle={
+          cashierView
             ? 'ملخص الوردية الحالية من لحظة الفتح — عهدة، تحصيل، ومصروفات.'
-            : 'الوردية الحالية وسجلها — التحصيل والخزنة للمدير.'}
-        </Typography>
-      </Paper>
+            : 'الوردية الحالية وسجلها — التحصيل والخزنة للمدير.'
+        }
+      />
 
       {actionMessage ? <Alert severity="info" onClose={() => setActionMessage('')}>{actionMessage}</Alert> : null}
       {isError ? <Alert severity="error">{(error as Error)?.message ?? 'فشل تحميل البيانات'}</Alert> : null}
@@ -203,13 +203,13 @@ export function TreasuryWorkspacePage() {
       )}
 
       {!cashierView ? (
-      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs value={safeTab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto">
+      <Paper elevation={0} sx={{ ...cardSx, px: 2, pt: 1, pb: 0.5 }}>
+        <Tabs value={safeTab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto" sx={tabsSx}>
           {visibleTabs.map((t) => (
             <Tab key={t.key} label={t.label} />
           ))}
         </Tabs>
-      </Box>
+      </Paper>
       ) : null}
 
       {isLoading && !workspace ? (

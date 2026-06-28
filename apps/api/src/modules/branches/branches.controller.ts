@@ -17,7 +17,15 @@ export class BranchesController {
   }
 
   @Get()
-  @RequirePermissions('branches.read')
+  @RequirePermissions(
+    'branches.read',
+    'inventory.manage',
+    'vendor_accounts.view',
+    'vendor_accounts.manage',
+    'pos.use',
+    'treasury.manage',
+    'reports.view',
+  )
   findAll(@Query('organizationId') organizationId: string) {
     return this.branchesService.findAll(organizationId);
   }

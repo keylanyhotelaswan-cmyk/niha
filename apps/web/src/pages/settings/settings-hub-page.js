@@ -4,6 +4,7 @@ import { Link as RouterLink } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context.js';
 import { getReceiptSettings } from '../../lib/pos-receipt-settings.js';
 import { localTodayKey } from '../../lib/date-utils.js';
+import { cardSx } from '../../lib/ui-tokens.js';
 export function SettingsHubPage() {
     const { permissions } = useAuth();
     const granted = permissions?.map((p) => p.code) ?? [];
@@ -15,6 +16,13 @@ export function SettingsHubPage() {
             path: `/shifts?from=${localTodayKey()}&to=${localTodayKey()}`,
             permission: 'treasury.manage',
             meta: `اليوم · ${localTodayKey()}`,
+        },
+        {
+            title: 'دليل الألوان والثيم',
+            description: 'مرجع بصري للألوان، الأزرار، التبويبات، وبطاقات KPI — للتحقق من التناسق.',
+            path: '/settings/theme',
+            permission: 'treasury.manage',
+            meta: 'Buffet · أبيض + بنفسجي',
         },
         {
             title: 'الفاتورة والطباعة',
@@ -51,10 +59,9 @@ export function SettingsHubPage() {
         return granted.includes(c.permission);
     });
     return (_jsxs(Stack, { spacing: 2, children: [_jsx(Typography, { variant: "body1", color: "text.secondary", children: "\u0627\u062E\u062A\u0631 \u0627\u0644\u0642\u0633\u0645 \u0627\u0644\u0644\u064A \u0639\u0627\u064A\u0632 \u062A\u0639\u062F\u0651\u0644\u0647:" }), _jsx(Grid, { container: true, spacing: 2, children: visible.map((card) => (_jsx(Grid, { item: true, xs: 12, md: 6, children: _jsxs(Paper, { sx: {
+                            ...cardSx,
                             p: 2.5,
                             height: '100%',
-                            borderRadius: 3,
-                            border: '1px solid rgba(185, 56, 23, 0.12)',
                             display: 'flex',
                             flexDirection: 'column',
                             gap: 1.5,

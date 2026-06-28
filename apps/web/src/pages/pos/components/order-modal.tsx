@@ -23,6 +23,7 @@ import {
 import { getCollectionStatusLabel, validateTakeawayOrderFields, type CartItem, type CollectionStatus, type OrderType } from '../../../lib/pos-store.js';
 import type { PaymentMethodOption } from '../constants.js';
 import { collectionTone, formatCurrency } from '../utils.js';
+import { cardSx, ui } from '../../../lib/ui-tokens.js';
 import { OrderTypeToggle } from './order-type-toggle.js';
 import { OrderConfirmDialog } from './order-confirm-dialog.js';
 import type { DeliveryDriver } from '../../../lib/pos-receipt-settings.js';
@@ -135,7 +136,7 @@ const ProductCard = memo(function ProductCard({
               ? 'warning.main'
               : qty > 0
                 ? 'primary.main'
-                : 'rgba(117,89,77,0.14)',
+                : ui.border,
           opacity: product.isAvailable ? 1 : 0.5,
           bgcolor: status === 'exceeded'
             ? 'rgba(239,68,68,0.04)'
@@ -294,7 +295,7 @@ export function OrderModal(props: OrderModalProps) {
       fullWidth
       PaperProps={{ sx: { borderRadius: props.fullScreen ? 0 : 4, bgcolor: '#faf6f1' } }}
     >
-      <DialogTitle sx={{ pb: 1, borderBottom: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.98)' }}>
+      <DialogTitle sx={{ pb: 1, borderBottom: `1px solid ${ui.border}`, bgcolor: ui.paper }}>
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1}>
           <Box>
             <Typography variant="h6" fontWeight={800}>
@@ -459,7 +460,7 @@ export function OrderModal(props: OrderModalProps) {
           </Grid2>
 
           <Grid2 size={{ xs: 12, md: 5 }} sx={{ height: '100%' }}>
-            <Paper elevation={0} sx={{ p: 2, borderRadius: 4, height: '100%', border: '1px solid rgba(117,89,77,0.14)', bgcolor: '#fff', display: 'flex', flexDirection: 'column' }}>
+            <Paper elevation={0} sx={{ ...cardSx, p: 2, height: '100%', display: 'flex', flexDirection: 'column' }}>
               <Typography variant="subtitle1" fontWeight={800} sx={{ mb: 1.5 }}>السلة · {props.cartItems.length} صنف</Typography>
               {cartPlanAlerts.length > 0 ? (
                 <Alert severity="warning" sx={{ borderRadius: 2, mb: 1.5, py: 0.5 }}>
@@ -578,7 +579,7 @@ export function OrderModal(props: OrderModalProps) {
         </Grid2>
       </DialogContent>
 
-      <DialogActions sx={{ px: 2, py: 1.5, borderTop: '1px solid rgba(117,89,77,0.12)', bgcolor: 'rgba(255,250,244,0.98)' }}>
+      <DialogActions sx={{ px: 2, py: 1.5, borderTop: `1px solid ${ui.border}`, bgcolor: ui.paper }}>
         {!isEdit ? <Button onClick={props.onClearCart}>إفراغ</Button> : null}
         <Button onClick={props.onClose}>إلغاء</Button>
         {!isEdit ? (

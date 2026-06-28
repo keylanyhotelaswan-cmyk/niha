@@ -19,6 +19,7 @@ import { PaymentMethodsModule } from './payment-methods/payment-methods.module.j
 import { SetupCostsModule } from './setup-costs/setup-costs.module.js';
 import { ReportsModule } from './reports/reports.module.js';
 import { PurchasingModule } from './purchasing/purchasing.module.js';
+import { VendorAccountsModule } from './vendor-accounts/vendor-accounts.module.js';
 import { CustomersModule } from './customers/customers.module.js';
 import { ProductionPlanModule } from './production-plan/production-plan.module.js';
 
@@ -62,6 +63,7 @@ import { ProductionPlanModule } from './production-plan/production-plan.module.j
     SetupCostsModule,
     ReportsModule,
     PurchasingModule,
+    VendorAccountsModule,
     CustomersModule,
     ProductionPlanModule,
   ],

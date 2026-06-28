@@ -22,6 +22,7 @@ import {
 import { useAuth } from '../lib/auth-context.js';
 import { localTodayKey } from '../lib/date-utils.js';
 import { useBranches } from '../lib/hooks.js';
+import { ui } from '../lib/ui-tokens.js';
 
 type AuditLogRow = {
   id: string;
@@ -148,7 +149,7 @@ export function AuditLogPage() {
             const changes = describeAuditChanges(entry);
             const orderNumber = String(entry.afterData?.orderNumber ?? entry.beforeData?.orderNumber ?? '');
             return (
-              <Paper key={entry.id} sx={{ p: 1.5, borderRadius: 2.5, border: '1px solid rgba(117,89,77,0.1)' }}>
+              <Paper key={entry.id} sx={{ p: 1.5, borderRadius: 2.5, border: `1px solid ${ui.border}` }}>
                 <Stack spacing={0.75}>
                   <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1} flexWrap="wrap">
                     <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap alignItems="center">

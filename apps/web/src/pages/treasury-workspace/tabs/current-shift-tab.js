@@ -2,6 +2,7 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { Alert, Button, Chip, Grid2, MenuItem, Stack, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography, } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { MetricCard, SectionCard } from '../../shared.js';
+import { ui } from '../../../lib/ui-tokens.js';
 import { useAuth } from '../../../lib/auth-context.js';
 import { apiCreateMovement, apiGetOrder, apiOpenShift, apiPendingCashHandoff } from '../../../lib/api.js';
 import { isIncomingTransaction, mapMovementTypeToApi, paymentMethodLabel, safeTypeLabel, treasuryTypeLabel, } from '../../../lib/treasury-store.js';
@@ -72,11 +73,11 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
         });
     }, [shiftOpen, accessToken, cashBoxId]);
     const treasuryStats = [
-        { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: '#0f766e' },
-        { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج الآن', progress: 76, tone: '#155e75' },
-        { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: summary?.ordersCount != null ? `${summary.ordersCount} طلب مغلق` : 'كل طرق الدفع', progress: 68, tone: '#7c3aed' },
-        { label: 'مصروفات الوردية', value: `${Number(summary?.expensesTotal ?? summary?.outgoing ?? 0).toLocaleString('en-US')} ج.م`, note: 'تُخصم من عهدة الكاشير', progress: 52, tone: '#b45309' },
-        { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: '#be123c' },
+        { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: 'success' },
+        { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج الآن', progress: 76, tone: 'info' },
+        { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: summary?.ordersCount != null ? `${summary.ordersCount} طلب مغلق` : 'كل طرق الدفع', progress: 68, tone: 'primary' },
+        { label: 'مصروفات الوردية', value: `${Number(summary?.expensesTotal ?? summary?.outgoing ?? 0).toLocaleString('en-US')} ج.م`, note: 'تُخصم من عهدة الكاشير', progress: 52, tone: 'warning' },
+        { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: 'warning' },
     ];
     const openOrderFromTx = async (tx) => {
         if (!tx.orderId || !accessToken)
@@ -189,6 +190,6 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
                                     return (_jsxs(TableRow, { hover: hasOrder, ...(hasOrder ? {
                                             onClick: () => { void openOrderFromTx(tx); },
                                             sx: { cursor: orderLoadingId === tx.orderId ? 'wait' : 'pointer' },
-                                        } : {}), children: [_jsx(TableCell, { children: new Date(tx.occurredAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) }), _jsx(TableCell, { children: treasuryTypeLabel(tx.transactionType, tx.sourceType) }), _jsx(TableCell, { children: safeTypeLabel(tx.safeType) }), _jsx(TableCell, { children: hasOrder ? (_jsx(Typography, { component: "span", variant: "body2", sx: { color: 'primary.main', fontWeight: 700, textDecoration: 'underline' }, children: tx.orderNumber ? `فاتورة ${tx.orderNumber}` : tx.note })) : (tx.note) }), _jsx(TableCell, { children: paymentMethodLabel(tx.paymentMethod) }), _jsxs(TableCell, { align: "left", sx: { color: incoming ? '#0f766e' : '#b45309', fontWeight: 700 }, children: [incoming ? '+' : '-', " ", Number(tx.amount).toLocaleString('en-US'), " \u062C.\u0645"] })] }, tx.id));
+                                        } : {}), children: [_jsx(TableCell, { children: new Date(tx.occurredAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) }), _jsx(TableCell, { children: treasuryTypeLabel(tx.transactionType, tx.sourceType) }), _jsx(TableCell, { children: safeTypeLabel(tx.safeType) }), _jsx(TableCell, { children: hasOrder ? (_jsx(Typography, { component: "span", variant: "body2", sx: { color: 'primary.main', fontWeight: 700, textDecoration: 'underline' }, children: tx.orderNumber ? `فاتورة ${tx.orderNumber}` : tx.note })) : (tx.note) }), _jsx(TableCell, { children: paymentMethodLabel(tx.paymentMethod) }), _jsxs(TableCell, { align: "left", sx: { color: incoming ? ui.success : ui.warn, fontWeight: 700 }, children: [incoming ? '+' : '-', " ", Number(tx.amount).toLocaleString('en-US'), " \u062C.\u0645"] })] }, tx.id));
                                 }) })] }), transactions.length === 0 ? _jsx(Alert, { severity: "info", sx: { mt: 1 }, children: "\u0644\u0627 \u062A\u0648\u062C\u062F \u062D\u0631\u0643\u0627\u062A." }) : null, transactions.some((tx) => tx.orderId) ? (_jsx(Typography, { variant: "caption", color: "text.secondary", sx: { display: 'block', mt: 1 }, children: "\u0627\u0636\u063A\u0637 \u0639\u0644\u0649 \u0631\u0642\u0645 \u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629 \u0644\u0639\u0631\u0636 \u062A\u0641\u0627\u0635\u064A\u0644 \u0627\u0644\u0637\u0644\u0628." })) : null] }), _jsx(OrderSummaryDialog, { open: Boolean(orderDialog), order: orderDialog, onClose: () => setOrderDialog(null) }), _jsx(ShiftSummaryPreviewDialog, { open: summaryPreviewOpen, onClose: () => setSummaryPreviewOpen(false), params: summaryPreviewParams, onMessage: onMessage }), _jsx(ShiftCloseDialog, { open: closeOpen, onClose: () => setCloseOpen(false), onConfirm: handleCloseShift, shiftId: shift?.id, summary: summary, shiftNumber: shift?.shiftNumber, cashierName: cashierName, openedAt: shift?.openedAt, onOpenSummaryPreview: openSummaryPreview })] }));
 }

@@ -1,7 +1,6 @@
 import {
   Box,
   Button,
-  Chip,
   Container,
   Divider,
   Drawer,
@@ -17,6 +16,7 @@ import {
 import { useMemo, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../lib/auth-context.js';
+import { cardSx, sidebarSx, ui } from '../../lib/ui-tokens.js';
 
 const settingsNav = [
   { label: 'نظرة عامة', path: '/settings', hint: 'ملخص الإعدادات', end: true },
@@ -35,29 +35,15 @@ function SettingsSidebar({ onNavigate }: { onNavigate?: () => void }) {
   );
 
   return (
-    <Paper
-      elevation={0}
-      sx={{
-        p: 2.5,
-        borderRadius: 4,
-        border: '1px solid rgba(185, 56, 23, 0.14)',
-        background: 'linear-gradient(180deg, rgba(255,248,239,0.98), rgba(250,239,226,0.98))',
-        height: '100%',
-        minHeight: { xs: 'auto', md: 'calc(100vh - 48px)' },
-      }}
-    >
+    <Paper elevation={0} sx={{ ...sidebarSx, p: 2, height: '100%', minHeight: { xs: 'auto', md: 'calc(100vh - 48px)' } }}>
       <Stack spacing={2.5} sx={{ height: '100%' }}>
-        <Stack spacing={1}>
-          <Chip label="Niha Settings" color="primary" sx={{ alignSelf: 'flex-start', fontWeight: 700 }} />
-          <Typography variant="h5" fontWeight={800}>
-            الإعدادات
-          </Typography>
-          <Typography variant="body2" color="text.secondary" lineHeight={1.7}>
-            صفحة مستقلة لتخصيص الفاتورة والطباعة وإدارة النظام.
-          </Typography>
+        <Stack spacing={0.25}>
+          <Typography variant="overline">NIHA</Typography>
+          <Typography variant="h6">الإعدادات</Typography>
+          <Typography variant="body2">تخصيص الفاتورة والطباعة وإدارة النظام.</Typography>
         </Stack>
 
-        <List disablePadding sx={{ display: 'grid', gap: 1, flex: 1 }}>
+        <List disablePadding sx={{ display: 'grid', gap: 0.25, flex: 1 }}>
           {visibleNav.map((item) => {
             const active = item.end
               ? location.pathname === item.path
@@ -71,16 +57,23 @@ function SettingsSidebar({ onNavigate }: { onNavigate?: () => void }) {
                 onClick={onNavigate}
                 sx={{
                   px: 1.5,
-                  py: 1.25,
-                  borderRadius: 3,
-                  border: active ? '1px solid rgba(185, 56, 23, 0.35)' : '1px solid rgba(117, 89, 77, 0.12)',
-                  bgcolor: active ? 'rgba(185, 56, 23, 0.10)' : 'rgba(255,250,244,0.82)',
+                  py: 1,
+                  borderRadius: `${ui.radiusSm}px`,
+                  bgcolor: active ? ui.sidebarActive : 'transparent',
+                  '&:hover': {
+                    bgcolor: active ? ui.sidebarActive : ui.sidebarHover,
+                  },
                 }}
               >
                 <ListItemText
                   primary={item.label}
                   secondary={item.hint}
-                  primaryTypographyProps={{ fontWeight: 800 }}
+                  primaryTypographyProps={{
+                    fontWeight: active ? 700 : 500,
+                    fontSize: '0.9375rem',
+                    color: active ? ui.sidebarActiveText : ui.muted,
+                  }}
+                  secondaryTypographyProps={{ fontSize: '0.75rem' }}
                 />
               </ListItemButton>
             );
@@ -90,12 +83,12 @@ function SettingsSidebar({ onNavigate }: { onNavigate?: () => void }) {
         <Divider />
 
         <Stack spacing={1}>
-          <Button variant="contained" fullWidth onClick={() => { navigate('/pos'); onNavigate?.(); }}>
-            ← العودة لنقطة البيع
+          <Button variant="contained" fullWidth size="small" onClick={() => { navigate('/pos'); onNavigate?.(); }}>
+            العودة لنقطة البيع
           </Button>
           {user ? (
-            <Button variant="outlined" fullWidth onClick={() => { logout(); navigate('/login'); }}>
-              خروج ({user.fullName})
+            <Button variant="outlined" fullWidth size="small" onClick={() => { logout(); navigate('/login'); }}>
+              خروج
             </Button>
           ) : null}
         </Stack>
@@ -116,51 +109,33 @@ export function SettingsShell() {
   }, [location.pathname]);
 
   return (
-    <Box
-      sx={{
-        minHeight: '100vh',
-        py: { xs: 2, md: 3 },
-        background: 'linear-gradient(180deg, #fff8ef 0%, #faf3ea 100%)',
-      }}
-    >
+    <Box sx={{ minHeight: '100vh', py: { xs: 2, md: 2.5 }, bgcolor: ui.bg }}>
       <Container maxWidth="xl">
         <Stack spacing={2}>
-          <Paper
-            elevation={0}
-            sx={{
-              p: { xs: 2, md: 2.5 },
-              borderRadius: 4,
-              color: '#fff7ed',
-              background: 'linear-gradient(135deg, #2f1f18 0%, #5c2b18 40%, #b93817 100%)',
-            }}
+          <Stack
+            direction="row"
+            justifyContent="space-between"
+            alignItems="center"
+            sx={{ pb: 1, borderBottom: `1px solid ${ui.border}` }}
           >
-            <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={2}>
-              <Stack spacing={0.5}>
-                <Typography variant="overline" sx={{ opacity: 0.85 }}>
-                  Niha · الإعدادات
-                </Typography>
-                <Typography variant="h4" fontWeight={800}>
-                  {pageTitle}
-                </Typography>
-              </Stack>
-              {!isDesktop ? (
-                <IconButton onClick={() => setDrawerOpen(true)} sx={{ color: '#fff7ed' }}>
-                  <Typography fontWeight={800}>القائمة</Typography>
-                </IconButton>
-              ) : null}
-            </Stack>
-          </Paper>
+            <Typography variant="h5">{pageTitle}</Typography>
+            {!isDesktop ? (
+              <IconButton size="small" onClick={() => setDrawerOpen(true)} aria-label="القائمة">
+                <Typography variant="body2" fontWeight={600}>☰</Typography>
+              </IconButton>
+            ) : null}
+          </Stack>
 
           <Box
             sx={{
               display: 'grid',
-              gap: 2.5,
-              gridTemplateColumns: { xs: '1fr', md: '280px minmax(0, 1fr)' },
+              gap: 2,
+              gridTemplateColumns: { xs: '1fr', md: '260px minmax(0, 1fr)' },
               alignItems: 'start',
             }}
           >
             {isDesktop ? <SettingsSidebar /> : null}
-            <Paper elevation={0} sx={{ p: { xs: 2, md: 3 }, borderRadius: 4, border: '1px solid rgba(185,56,23,0.10)' }}>
+            <Paper elevation={0} sx={{ ...cardSx, p: { xs: 2, md: 2.5 } }}>
               <Outlet />
             </Paper>
           </Box>
@@ -168,7 +143,7 @@ export function SettingsShell() {
       </Container>
 
       <Drawer anchor="right" open={!isDesktop && drawerOpen} onClose={() => setDrawerOpen(false)}>
-        <Box sx={{ width: 300, p: 2 }}>
+        <Box sx={{ width: 280, p: 2, bgcolor: ui.ivory }}>
           <SettingsSidebar onNavigate={() => setDrawerOpen(false)} />
         </Box>
       </Drawer>

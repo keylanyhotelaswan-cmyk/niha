@@ -173,7 +173,7 @@ export function TreasuryTab({ workspace, branchId, cashBoxId, onRefresh, onMessa
               value={`${profitsSafe.toLocaleString('en-US')} ج.م`}
               note="إيراد مجمّد للأرباح الصافية"
               progress={totalSafe > 0 ? Math.min(100, (profitsSafe / totalSafe) * 100) : 0}
-              tone="#7c2d12"
+              tone="warning"
             />
           </Grid2>
           <Grid2 size={{ xs: 12, md: 4 }}>
@@ -182,7 +182,7 @@ export function TreasuryTab({ workspace, branchId, cashBoxId, onRefresh, onMessa
               value={`${expensesSafe.toLocaleString('en-US')} ج.م`}
               note="مصدر الصرف للموردين والآجل والمصروفات"
               progress={totalSafe > 0 ? Math.min(100, (expensesSafe / totalSafe) * 100) : 0}
-              tone="#0f766e"
+              tone="success"
             />
           </Grid2>
           <Grid2 size={{ xs: 12, md: 4 }}>
@@ -191,7 +191,7 @@ export function TreasuryTab({ workspace, branchId, cashBoxId, onRefresh, onMessa
               value={`${totalSafe.toLocaleString('en-US')} ج.م`}
               note={cumulative ? 'الرصيد التراكمي المعتمد' : 'حركات اليوم المعتمدة'}
               progress={totalSafe > 0 ? 100 : 0}
-              tone="#155e75"
+              tone="info"
             />
           </Grid2>
         </Grid2>
@@ -324,7 +324,7 @@ export function TreasuryTab({ workspace, branchId, cashBoxId, onRefresh, onMessa
           value={`${physicalCash.toLocaleString('en-US')} ج.م`}
           note={cumulative ? 'تراكمي — حركات نقدية فقط' : 'رصيد افتتاح + تحصيل نقدي معلّق + إيداع − سحب/مصروف'}
           progress={physicalCash > 0 ? 72 : 0}
-          tone="#155e75"
+          tone="info"
         />
         <Alert severity="info" sx={{ mt: 1.5 }}>
           التحصيل النقدي يزيد العهدة. اعتماد الإدارة يخصم المبلغ من العهدة ويسجّله في الخزنة.

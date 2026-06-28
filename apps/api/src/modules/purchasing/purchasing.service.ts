@@ -1,24 +1,80 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { SequenceService } from '../sequence/sequence.service.js';
+import { VendorInvoicesService } from '../vendor-accounts/vendor-invoices.service.js';
+import { VendorLedgerService } from '../vendor-accounts/vendor-ledger.service.js';
 
 @Injectable()
 export class VendorsService {
   constructor(
     private prisma: PrismaService,
-    private sequenceService: SequenceService,
+    private vendorLedger: VendorLedgerService,
   ) {}
 
-  list(branchId: string) {
-    return this.prisma.vendor.findMany({ where: { branchId }, orderBy: { name: 'asc' } });
+  async list(branchId: string, withBalance = false) {
+    if (!branchId?.trim()) {
+      throw new BadRequestException('branchId is required');
+    }
+    const vendors = await this.prisma.vendor.findMany({
+      where: { branchId },
+      orderBy: { name: 'asc' },
+    });
+    if (!withBalance) return vendors;
+    const balances = await Promise.all(vendors.map((v) => this.vendorLedger.getBalance(v.id)));
+    return vendors.map((v, i) => ({ ...v, currentBalance: balances[i] }));
   }
 
-  create(data: { branchId: string; name: string; code: string; phone?: string }) {
-    return this.prisma.vendor.create({ data });
+  create(data: {
+    branchId: string;
+    name: string;
+    code: string;
+    phone?: string;
+    openingBalance?: number;
+    taxId?: string;
+    address?: string;
+    note?: string;
+  }) {
+    return this.prisma.vendor.create({
+      data: {
+        branchId: data.branchId,
+        name: data.name,
+        code: data.code,
+        phone: data.phone ?? null,
+        openingBalance: data.openingBalance ?? 0,
+        openingBalanceAt: data.openingBalance ? new Date() : null,
+        taxId: data.taxId ?? null,
+        address: data.address ?? null,
+        note: data.note ?? null,
+      },
+    });
   }
 
-  update(id: string, data: { name?: string; phone?: string }) {
-    return this.prisma.vendor.update({ where: { id }, data });
+  update(
+    id: string,
+    data: {
+      name?: string;
+      phone?: string;
+      openingBalance?: number;
+      taxId?: string;
+      address?: string;
+      note?: string;
+      isActive?: boolean;
+    },
+  ) {
+    return this.prisma.vendor.update({
+      where: { id },
+      data: {
+        ...(data.name !== undefined ? { name: data.name } : {}),
+        ...(data.phone !== undefined ? { phone: data.phone } : {}),
+        ...(data.taxId !== undefined ? { taxId: data.taxId } : {}),
+        ...(data.address !== undefined ? { address: data.address } : {}),
+        ...(data.note !== undefined ? { note: data.note } : {}),
+        ...(data.isActive !== undefined ? { isActive: data.isActive } : {}),
+        ...(data.openingBalance !== undefined
+          ? { openingBalance: data.openingBalance, openingBalanceAt: new Date() }
+          : {}),
+      },
+    });
   }
 
   remove(id: string) {
@@ -31,6 +87,7 @@ export class PurchaseOrdersService {
   constructor(
     private prisma: PrismaService,
     private sequenceService: SequenceService,
+    private vendorInvoicesService: VendorInvoicesService,
   ) {}
 
   list(branchId: string) {
@@ -76,7 +133,7 @@ export class PurchaseOrdersService {
   async receive(poId: string, data: { warehouseId: string; receivedById?: string }) {
     const po = await this.prisma.purchaseOrder.findUnique({
       where: { id: poId },
-      include: { lines: true, vendor: true },
+      include: { lines: { include: { stockItem: true } }, vendor: true },
     });
     if (!po) throw new NotFoundException('Purchase order not found');
 
@@ -103,7 +160,7 @@ export class PurchaseOrdersService {
             })),
           },
         },
-        include: { lines: true },
+        include: { lines: { include: { stockItem: true } } },
       });
 
       for (const line of po.lines) {
@@ -135,6 +192,12 @@ export class PurchaseOrdersService {
       await tx.purchaseOrder.update({
         where: { id: poId },
         data: { status: 'RECEIVED' },
+      });
+
+      await this.vendorInvoicesService.createFromGoodsReceipt(tx, {
+        receipt,
+        organizationId: branch!.organizationId,
+        ...(data.receivedById ? { createdById: data.receivedById } : {}),
       });
 
       return receipt;

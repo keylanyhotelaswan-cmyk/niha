@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { apiGetProductionPlan, apiSaveProductionPlan } from '../../../lib/api.js';
 import { formatDateLabelAr, localTodayKey } from '../../../lib/date-utils.js';
+import { ui } from '../../../lib/ui-tokens.js';
 
 type PlanRow = {
   productId: string;
@@ -134,7 +135,7 @@ export function ProductionPlanDialog({ open, branchId, accessToken, onClose, onS
                       sx={{
                         p: 1.25,
                         borderRadius: 2.5,
-                        border: '1px solid rgba(117,89,77,0.12)',
+                        border: `1px solid ${ui.border}`,
                         bgcolor: over ? 'rgba(239,68,68,0.06)' : 'rgba(255,250,244,0.95)',
                       }}
                     >

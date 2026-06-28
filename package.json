@@ -14,6 +14,7 @@
     "dev:print-bridge": "npm run dev --workspace @niha/print-bridge",
     "dev:desktop": "concurrently -n api,web,print,desktop -c blue,green,yellow,cyan \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:print-bridge\" \"npm run dev --workspace @niha/desktop\"",
     "dev:desktop:cloud": "concurrently -n web,print,desktop -c green,yellow,cyan \"cross-env VITE_API_URL=https://niha-jxjq.onrender.com/api npm run dev:web\" \"npm run dev:print-bridge\" \"npm run dev --workspace @niha/desktop\"",
+    "dev:desktop:local": "npm run dev:desktop",
     "build:web:desktop": "cross-env VITE_ELECTRON=1 VITE_API_URL=https://niha-jxjq.onrender.com/api npm run build --workspace @niha/web",
     "build:desktop": "npm run build:web:desktop",
     "pack:desktop": "npm run build:desktop && node scripts/prepare-desktop-pack.mjs && npm run pack --workspace @niha/desktop",

@@ -375,6 +375,14 @@ export class TreasuryService {
     if (EXPENSE_ONLY_OUT_TYPES.includes(params.transactionType) && safeType !== 'EXPENSES') {
       throw new BadRequestException('Expense payments must be withdrawn from expenses safe');
     }
+    if (params.transactionType === 'VENDOR_PAYMENT') {
+      if (params.shiftId) {
+        throw new BadRequestException('Vendor payments must not be linked to a shift');
+      }
+      if (safeType !== 'EXPENSES') {
+        throw new BadRequestException('Vendor payments must use expenses safe');
+      }
+    }
     if (
       params.transactionType === 'CASH_WITHDRAWAL' &&
       safeType === 'PROFITS' &&

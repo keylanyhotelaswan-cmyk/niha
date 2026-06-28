@@ -15,6 +15,7 @@ import {
   paymentMethodLabel,
   treasuryTypeLabel,
 } from '../../../lib/treasury-store.js';
+import { ui } from '../../../lib/ui-tokens.js';
 
 type ShiftDetailDrawerProps = {
   open: boolean;
@@ -90,7 +91,7 @@ export function ShiftDetailDrawer({ open, onClose, entry, detailTransactions = [
                   <TableCell>
                     {treasuryTypeLabel(tx.transactionType)} · {paymentMethodLabel(tx.paymentMethod)}
                   </TableCell>
-                  <TableCell align="left" sx={{ color: incoming ? '#0f766e' : '#b45309', fontWeight: 700 }}>
+                  <TableCell align="left" sx={{ color: incoming ? ui.success : ui.warn, fontWeight: 700 }}>
                     {incoming ? '+' : '-'} {Number(tx.amount).toLocaleString('en-US')}
                   </TableCell>
                 </TableRow>

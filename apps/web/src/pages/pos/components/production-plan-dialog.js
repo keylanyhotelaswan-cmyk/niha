@@ -3,6 +3,7 @@ import { Alert, Box, Button, Chip, CircularProgress, Dialog, DialogActions, Dial
 import { useEffect, useMemo, useState } from 'react';
 import { apiGetProductionPlan, apiSaveProductionPlan } from '../../../lib/api.js';
 import { formatDateLabelAr, localTodayKey } from '../../../lib/date-utils.js';
+import { ui } from '../../../lib/ui-tokens.js';
 export function ProductionPlanDialog({ open, branchId, accessToken, onClose, onSaved }) {
     const [rows, setRows] = useState([]);
     const [dateKey, setDateKey] = useState(localTodayKey());
@@ -70,7 +71,7 @@ export function ProductionPlanDialog({ open, branchId, accessToken, onClose, onS
                                     return (_jsxs(Stack, { direction: { xs: 'column', sm: 'row' }, spacing: 1, alignItems: { sm: 'center' }, sx: {
                                             p: 1.25,
                                             borderRadius: 2.5,
-                                            border: '1px solid rgba(117,89,77,0.12)',
+                                            border: `1px solid ${ui.border}`,
                                             bgcolor: over ? 'rgba(239,68,68,0.06)' : 'rgba(255,250,244,0.95)',
                                         }, children: [_jsxs(Box, { sx: { flex: 1, minWidth: 0 }, children: [_jsx(Typography, { fontWeight: 700, noWrap: true, children: row.name }), _jsx(Typography, { variant: "caption", color: "text.secondary", children: row.categoryName })] }), _jsx(Chip, { size: "small", label: `مباع ${row.soldQuantity}`, color: over ? 'error' : 'default', variant: "outlined" }), _jsx(TextField, { size: "small", type: "number", label: "\u0627\u0644\u0645\u062E\u0637\u0637", placeholder: "\u2014", value: row.draft, onChange: (e) => {
                                                     const v = e.target.value;

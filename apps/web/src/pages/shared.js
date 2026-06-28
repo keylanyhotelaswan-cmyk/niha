@@ -1,31 +1,26 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
-import { Avatar, Box, Card, CardContent, Chip, Grid2, LinearProgress, Paper, Stack, Typography } from '@mui/material';
-export function SectionCard({ title, description, action, children }) {
-    return (_jsx(Paper, { elevation: 0, sx: { p: 2.5, borderRadius: 5, border: '1px solid rgba(117, 89, 77, 0.12)', background: 'linear-gradient(180deg, rgba(255,250,244,0.96), rgba(255,245,235,0.98))', boxShadow: '0 18px 38px rgba(47, 31, 24, 0.05)' }, children: _jsxs(Stack, { spacing: 2.5, children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 1, children: [_jsxs(Box, { children: [_jsx(Typography, { variant: "h5", fontWeight: 800, children: title }), description ? (_jsx(Typography, { variant: "body2", color: "text.secondary", sx: { mt: 0.5 }, children: description })) : null] }), action] }), children] }) }));
+import { Box, Card, CardContent, Grid2, Paper, Stack, Typography } from '@mui/material';
+import { cardSx, metricToneSx, ui } from '../lib/ui-tokens.js';
+export function SectionCard({ title, description, action, children, compact, }) {
+    return (_jsx(Paper, { elevation: 0, sx: { ...cardSx, p: compact ? 2 : 2.25 }, children: _jsxs(Stack, { spacing: compact ? 1.5 : 2, children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 1, children: [_jsxs(Box, { children: [_jsx(Typography, { variant: "h6", children: title }), description ? (_jsx(Typography, { variant: "body2", sx: { mt: 0.25 }, children: description })) : null] }), action] }), children] }) }));
 }
-export function MetricCard({ label, value, note, progress, tone }) {
-    return (_jsx(Card, { elevation: 0, sx: { height: '100%', borderRadius: 5, border: '1px solid rgba(117, 89, 77, 0.12)', background: 'linear-gradient(180deg, rgba(255,251,246,0.98), rgba(252,243,232,0.98))' }, children: _jsx(CardContent, { children: _jsxs(Stack, { spacing: 1.4, children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: label }), _jsx(Typography, { variant: "h4", fontWeight: 800, children: value }), _jsx(Typography, { variant: "body2", color: "text.secondary", children: note }), _jsx(LinearProgress, { variant: "determinate", value: progress, sx: {
-                            height: 8,
-                            borderRadius: 999,
-                            backgroundColor: 'rgba(148, 163, 184, 0.14)',
-                            '& .MuiLinearProgress-bar': {
-                                borderRadius: 999,
-                                backgroundColor: tone,
-                            },
-                        } })] }) }) }));
+export function MetricCard({ label, value, note, tone = 'default', }) {
+    const isHexTone = typeof tone === 'string' && tone.startsWith('#');
+    const toneStyle = isHexTone ? null : metricToneSx(tone);
+    const valueColor = isHexTone ? tone : toneStyle.color;
+    const labelColor = isHexTone ? ui.muted : toneStyle.color;
+    const bgcolor = isHexTone ? ui.paper : toneStyle.bgcolor;
+    return (_jsx(Card, { elevation: 0, sx: {
+            height: '100%',
+            ...cardSx,
+            bgcolor,
+            boxShadow: tone === 'default' || isHexTone ? ui.shadowSm : 'none',
+            ...(isHexTone ? { borderLeft: `3px solid ${tone}` } : {}),
+        }, children: _jsx(CardContent, { sx: { py: 2, '&:last-child': { pb: 2 } }, children: _jsxs(Stack, { spacing: 0.75, children: [_jsx(Typography, { variant: "body2", sx: { color: isHexTone ? ui.muted : labelColor, opacity: isHexTone ? 1 : 0.85 }, children: label }), _jsx(Typography, { variant: "h5", fontWeight: 700, letterSpacing: "-0.02em", sx: { color: valueColor }, children: value }), note ? (_jsx(Typography, { variant: "caption", sx: { color: isHexTone ? 'text.secondary' : labelColor, opacity: isHexTone ? 1 : 0.75 }, children: note })) : null] }) }) }));
 }
 export function WorkflowList({ items }) {
-    return (_jsx(Stack, { spacing: 2, children: items.map((item, index) => (_jsxs(Stack, { direction: "row", spacing: 1.5, alignItems: "flex-start", children: [_jsx(Avatar, { sx: { width: 32, height: 32, bgcolor: 'rgba(185,56,23,0.12)', color: '#b93817', fontSize: 14 }, children: index + 1 }), _jsx(Typography, { variant: "body2", color: "text.secondary", lineHeight: 1.9, children: item })] }, item))) }));
+    return (_jsx(Stack, { spacing: 1.5, component: "ol", sx: { m: 0, pl: 2.5 }, children: items.map((item) => (_jsx(Typography, { component: "li", variant: "body2", children: item }, item))) }));
 }
-export function StatusCards({ items }) {
-    return (_jsx(Grid2, { container: true, spacing: 2, children: items.map((item) => (_jsx(Grid2, { size: { xs: 12, md: 6 }, children: _jsx(Card, { elevation: 0, sx: {
-                    height: '100%',
-                    borderRadius: 4,
-                    border: '1px solid rgba(117, 89, 77, 0.12)',
-                    background: 'linear-gradient(180deg, rgba(255,250,244,0.98), rgba(252,243,232,0.98))',
-                }, children: _jsx(CardContent, { children: _jsxs(Stack, { spacing: 1.5, children: [_jsxs(Stack, { direction: "row", justifyContent: "space-between", alignItems: "flex-start", gap: 1, children: [_jsx(Typography, { variant: "h6", fontWeight: 800, children: item.title }), _jsx(Chip, { label: item.status, size: "small", sx: {
-                                            bgcolor: `${item.accent}14`,
-                                            color: item.accent,
-                                            fontWeight: 700,
-                                        } })] }), _jsx(Typography, { variant: "body2", color: "text.secondary", lineHeight: 1.9, children: item.description })] }) }) }) }, item.title))) }));
+export function StatusCards({ items, }) {
+    return (_jsx(Grid2, { container: true, spacing: 1.5, children: items.map((item) => (_jsx(Grid2, { size: { xs: 12, sm: 6 }, children: _jsxs(Paper, { elevation: 0, sx: { p: 2, ...cardSx }, children: [_jsx(Typography, { variant: "subtitle2", children: item.title }), _jsx(Typography, { variant: "body2", sx: { mt: 0.5 }, children: item.description })] }) }, item.title))) }));
 }

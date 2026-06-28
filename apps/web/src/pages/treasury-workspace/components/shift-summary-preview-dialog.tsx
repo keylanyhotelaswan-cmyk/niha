@@ -24,6 +24,7 @@ import {
   type ShiftSummaryPrintParams,
 } from '../../../lib/shift-summary-print.js';
 import { ShiftCollectionBreakdown } from './shift-collection-breakdown.js';
+import { ui } from '../../../lib/ui-tokens.js';
 
 type ShiftSummaryPreviewDialogProps = {
   open: boolean;
@@ -125,9 +126,9 @@ export function ShiftSummaryPreviewDialog({
 
           <Box
             sx={{
-              border: '1px dashed rgba(117,89,77,0.35)',
+              border: `1px dashed ${ui.borderStrong}`,
               borderRadius: 2,
-              bgcolor: '#fafafa',
+              bgcolor: ui.surfaceMuted,
               p: 1,
               maxHeight: 280,
               overflow: 'auto',
@@ -144,7 +145,7 @@ export function ShiftSummaryPreviewDialog({
                 width: '100%',
                 minHeight: 220,
                 border: 'none',
-                bgcolor: '#fff',
+                bgcolor: ui.paper,
                 transform: 'scale(0.92)',
                 transformOrigin: 'top center',
               }}

@@ -14,6 +14,8 @@ async function up() {
     { code: 'treasury.manage', label: 'Manage treasury' },
     { code: 'reports.view', label: 'View reports' },
     { code: 'inventory.manage', label: 'Manage inventory' },
+    { code: 'vendor_accounts.view', label: 'View vendor accounts' },
+    { code: 'vendor_accounts.manage', label: 'Manage vendor accounts' },
     { code: 'setup_costs.manage', label: 'Manage setup costs' },
     { code: 'accounting.view', label: 'View accounting' },
   ];
@@ -50,9 +52,9 @@ async function up() {
     }
   };
 
-  await assign('manager', ['users.manage', 'pos.use', 'treasury.manage', 'reports.view', 'inventory.manage', 'setup_costs.manage']);
+  await assign('manager', ['users.manage', 'pos.use', 'treasury.manage', 'reports.view', 'inventory.manage', 'vendor_accounts.view', 'vendor_accounts.manage', 'setup_costs.manage']);
   await assign('cashier', ['pos.use', 'shifts.access']);
-  await assign('accountant', ['reports.view', 'accounting.view']);
+  await assign('accountant', ['reports.view', 'accounting.view', 'vendor_accounts.view', 'vendor_accounts.manage']);
 
   // create users
   console.log('Seeding users...');

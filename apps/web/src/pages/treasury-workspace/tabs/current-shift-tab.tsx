@@ -15,6 +15,7 @@ import {
 } from '@mui/material';
 import { useEffect, useState } from 'react';
 import { MetricCard, SectionCard } from '../../shared.js';
+import { ui } from '../../../lib/ui-tokens.js';
 import { useAuth } from '../../../lib/auth-context.js';
 import { apiCreateMovement, apiGetOrder, apiOpenShift, apiPendingCashHandoff } from '../../../lib/api.js';
 import {
@@ -112,11 +113,11 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
   }, [shiftOpen, accessToken, cashBoxId]);
 
   const treasuryStats = [
-    { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: '#0f766e' },
-    { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج الآن', progress: 76, tone: '#155e75' },
-    { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: summary?.ordersCount != null ? `${summary.ordersCount} طلب مغلق` : 'كل طرق الدفع', progress: 68, tone: '#7c3aed' },
-    { label: 'مصروفات الوردية', value: `${Number(summary?.expensesTotal ?? summary?.outgoing ?? 0).toLocaleString('en-US')} ج.م`, note: 'تُخصم من عهدة الكاشير', progress: 52, tone: '#b45309' },
-    { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: '#be123c' },
+    { label: 'رصيد الافتتاح', value: `${Number(summary?.openingFloat ?? 0).toLocaleString('en-US')} ج.م`, note: shiftOpen ? 'من فتح الوردية' : '—', progress: 100, tone: 'success' },
+    { label: 'عهدة الكاشير', value: `${expectedCash.toLocaleString('en-US')} ج.م`, note: 'نقدي في الدرج الآن', progress: 76, tone: 'info' },
+    { label: 'مبيعات الوردية', value: `${Number(summary?.totalSales ?? 0).toLocaleString('en-US')} ج.م`, note: summary?.ordersCount != null ? `${summary.ordersCount} طلب مغلق` : 'كل طرق الدفع', progress: 68, tone: 'primary' },
+    { label: 'مصروفات الوردية', value: `${Number(summary?.expensesTotal ?? summary?.outgoing ?? 0).toLocaleString('en-US')} ج.م`, note: 'تُخصم من عهدة الكاشير', progress: 52, tone: 'warning' },
+    { label: 'بانتظار اعتماد', value: `${Number(summary?.pendingCashInCustody ?? summary?.pending ?? 0).toLocaleString('en-US')} ج.م`, note: 'نقدي في العهدة حتى تعتمده', progress: Number(summary?.pendingCashInCustody ?? 0) > 0 ? 58 : 0, tone: 'warning' },
   ];
 
   const openOrderFromTx = async (tx: { orderId?: string | null; paymentMethod?: string }) => {
@@ -394,7 +395,7 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
                     )}
                   </TableCell>
                   <TableCell>{paymentMethodLabel(tx.paymentMethod)}</TableCell>
-                  <TableCell align="left" sx={{ color: incoming ? '#0f766e' : '#b45309', fontWeight: 700 }}>
+                  <TableCell align="left" sx={{ color: incoming ? ui.success : ui.warn, fontWeight: 700 }}>
                     {incoming ? '+' : '-'} {Number(tx.amount).toLocaleString('en-US')} ج.م
                   </TableCell>
                 </TableRow>

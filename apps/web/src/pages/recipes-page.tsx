@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
 import { SectionCard, MetricCard } from './shared.js';
+import { ui } from '../lib/ui-tokens.js';
 import { useAuth } from '../lib/auth-context.js';
 
 const API = 'http://localhost:4000/api';
@@ -186,10 +187,10 @@ export function RecipesPage() {
   const selectedVersion = useMemo(() => versions.find((v) => v.id === selectedVersionId), [versions, selectedVersionId]);
 
   const stats = useMemo(() => [
-    { label: 'الوصفات', value: String(recipes.length), note: 'وصفات مسجلة', progress: recipes.length > 0 ? 80 : 0, tone: '#1d4ed8' },
-    { label: 'الإصدارات', value: String(versions.length), note: `للوصفة المحددة`, progress: versions.length > 0 ? 65 : 0, tone: '#0f766e' },
-    { label: 'تكلفة النشط', value: selectedVersion ? `${Number(selectedVersion.totalCost).toFixed(2)} ج.م` : '—', note: selectedVersion ? `REV-${selectedVersion.versionNumber}` : '', progress: selectedVersion ? 70 : 0, tone: '#7c3aed' },
-    { label: 'منتجات كتالوج', value: String(products.length), note: 'صنف متاح', progress: 45, tone: '#b45309' },
+    { label: 'الوصفات', value: String(recipes.length), note: 'وصفات مسجلة', progress: recipes.length > 0 ? 80 : 0, tone: 'info' },
+    { label: 'الإصدارات', value: String(versions.length), note: `للوصفة المحددة`, progress: versions.length > 0 ? 65 : 0, tone: 'success' },
+    { label: 'تكلفة النشط', value: selectedVersion ? `${Number(selectedVersion.totalCost).toFixed(2)} ج.م` : '—', note: selectedVersion ? `REV-${selectedVersion.versionNumber}` : '', progress: selectedVersion ? 70 : 0, tone: 'primary' },
+    { label: 'منتجات كتالوج', value: String(products.length), note: 'صنف متاح', progress: 45, tone: 'warning' },
   ], [recipes, versions, selectedVersion, products]);
 
   return (
@@ -208,7 +209,7 @@ export function RecipesPage() {
         description="ربط المنتجات النهائية بالمكونات المخزنية"
         action={<Button variant="contained" onClick={() => setRecipeDialog(true)}>إضافة وصفة</Button>}
       >
-        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -246,7 +247,7 @@ export function RecipesPage() {
       {/* Versions for selected recipe */}
       {selectedRecipeId && (
         <SectionCard title="إصدارات الوصفة" description={`الوصفة المحددة: ${recipes.find((r) => r.id === selectedRecipeId)?.name || ''}`}>
-          <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+          <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
             <Table size="small">
               <TableHead>
                 <TableRow>
@@ -274,7 +275,7 @@ export function RecipesPage() {
 
           {/* Version details with components */}
           {selectedVersion && selectedVersion.components && selectedVersion.components.length > 0 && (
-            <Paper elevation={0} sx={{ mt: 2, p: 2, borderRadius: 4, border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+            <Paper elevation={0} sx={{ mt: 2, p: 2, borderRadius: 4, border: `1px solid ${ui.border}` }}>
               <Typography variant="h6" fontWeight={800} sx={{ mb: 2 }}>مكونات REV-{selectedVersion.versionNumber}</Typography>
               <Table size="small">
                 <TableHead>

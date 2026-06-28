@@ -17,6 +17,7 @@ import {
   getAuditActionLabel,
 } from '../../../lib/audit-log-utils.js';
 import { useAuth } from '../../../lib/auth-context.js';
+import { ui } from '../../../lib/ui-tokens.js';
 
 type AuditEntry = {
   id: string;
@@ -65,7 +66,7 @@ export function OrderAuditDialog({ open, orderId, orderCode, onClose }: OrderAud
             {logs.map((entry) => {
               const changes = describeAuditChanges(entry);
               return (
-                <Stack key={entry.id} spacing={0.35} sx={{ p: 1.25, borderRadius: 2, bgcolor: 'rgba(117,89,77,0.06)' }}>
+                <Stack key={entry.id} spacing={0.35} sx={{ p: 1.25, borderRadius: 2, bgcolor: ui.surfaceMuted }}>
                   <Typography variant="body2" fontWeight={800}>
                     {getAuditActionLabel(entry.action)}
                   </Typography>

@@ -529,12 +529,73 @@ export function useBundleSuggestions(branchId?: string, range?: ReportDateRange)
   });
 }
 
-export function useVendors(branchId?: string) {
+export function useVendors(branchId?: string, withBalance = false) {
   const { accessToken } = useAuth();
   return useQuery({
-    queryKey: ['vendors', branchId],
+    queryKey: ['vendors', branchId, withBalance],
     queryFn: async () => {
-      const res = await apiGet<any[]>(`/vendors?branchId=${branchId}`, token(accessToken));
+      const params = new URLSearchParams({ branchId: branchId! });
+      if (withBalance) params.set('withBalance', 'true');
+      const res = await apiGet<any[]>(`/vendors?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? [];
+    },
+    enabled: !!accessToken && !!branchId,
+  });
+}
+
+export function useVendorStatement(vendorId?: string, from?: string, to?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['vendor-statement', vendorId, from, to],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (from) params.set('from', from);
+      if (to) params.set('to', to);
+      const res = await apiGet<any>(`/vendors/${vendorId}/statement?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!vendorId,
+  });
+}
+
+export function useVendorInvoices(branchId?: string, vendorId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['vendor-invoices', branchId, vendorId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ branchId: branchId! });
+      if (vendorId) params.set('vendorId', vendorId);
+      const res = await apiGet<any[]>(`/vendor-invoices?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? [];
+    },
+    enabled: !!accessToken && !!branchId,
+  });
+}
+
+export function useVendorPayments(branchId?: string, vendorId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['vendor-payments', branchId, vendorId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ branchId: branchId! });
+      if (vendorId) params.set('vendorId', vendorId);
+      const res = await apiGet<any[]>(`/vendor-payments?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? [];
+    },
+    enabled: !!accessToken && !!branchId,
+  });
+}
+
+export function usePaymentMethods(branchId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['payment-methods', branchId],
+    queryFn: async () => {
+      const res = await apiGet<any[]>(`/payment-methods?branchId=${branchId}`, token(accessToken));
       if (!res.ok) throw new Error(res.body ?? res.error);
       return res.data ?? [];
     },
@@ -552,6 +613,36 @@ export function usePurchaseOrders(branchId?: string) {
       return res.data ?? [];
     },
     enabled: !!accessToken && !!branchId,
+  });
+}
+
+export function useWarehouses(branchId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['warehouses', branchId],
+    queryFn: async () => {
+      const res = await apiGet<any[]>(`/warehouses?branchId=${branchId}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data ?? [];
+    },
+    enabled: !!accessToken && !!branchId,
+  });
+}
+
+export function useVendorAccountsContext(branchId?: string, cashBoxId?: string) {
+  const { accessToken } = useAuth();
+  return useQuery({
+    queryKey: ['vendor-accounts-context', branchId, cashBoxId],
+    queryFn: async () => {
+      const params = new URLSearchParams({ branchId: branchId! });
+      if (cashBoxId) params.set('cashBoxId', cashBoxId);
+      const res = await apiGet<any>(`/vendor-accounts/context?${params}`, token(accessToken));
+      if (!res.ok) throw new Error(res.body ?? res.error);
+      return res.data;
+    },
+    enabled: !!accessToken && !!branchId,
+    staleTime: 20_000,
+    refetchInterval: 30_000,
   });
 }
 

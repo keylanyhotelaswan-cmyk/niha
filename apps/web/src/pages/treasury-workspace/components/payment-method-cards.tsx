@@ -1,5 +1,6 @@
 import { Box, Grid2, Paper, Stack, Typography } from '@mui/material';
 import { paymentMethodLabel } from '../../../lib/treasury-store.js';
+import { cardSx, ui } from '../../../lib/ui-tokens.js';
 
 type PaymentMethodRow = {
   code: string;
@@ -28,7 +29,7 @@ export function PaymentMethodCards({
 
         return (
           <Grid2 key={pm.code} size={{ xs: 12, sm: 6, md: 4 }}>
-            <Paper elevation={0} sx={{ p: 2, borderRadius: 3, border: '1px solid rgba(117,89,77,0.14)', bgcolor: '#fff' }}>
+            <Paper elevation={0} sx={{ ...cardSx, p: 2 }}>
               <Stack spacing={0.75}>
                 <Typography variant="caption" color="text.secondary">{pm.name}</Typography>
                 <Typography variant="h6" fontWeight={800}>

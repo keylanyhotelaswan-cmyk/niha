@@ -1,9 +1,10 @@
 import { Button, Stack } from '@mui/material';
 import type { OrderType } from '../../../lib/pos-store.js';
+import { ui } from '../../../lib/ui-tokens.js';
 
 export function OrderTypeToggle({ value, onChange, disabled }: { value: OrderType; onChange: (t: OrderType) => void; disabled?: boolean }) {
   return (
-    <Stack direction="row" spacing={0.5} sx={{ bgcolor: 'rgba(47,31,24,0.06)', borderRadius: 3, p: 0.5, opacity: disabled ? 0.65 : 1 }}>
+    <Stack direction="row" spacing={0.5} sx={{ bgcolor: ui.surfaceMuted, borderRadius: 3, p: 0.5, opacity: disabled ? 0.65 : 1 }}>
       <Button
         size="small"
         fullWidth

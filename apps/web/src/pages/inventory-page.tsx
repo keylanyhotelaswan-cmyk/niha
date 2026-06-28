@@ -21,10 +21,12 @@ import {
   Typography,
 } from '@mui/material';
 import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../lib/auth-context.js';
 import { MetricCard, SectionCard } from './shared.js';
-import { useVendors, usePurchaseOrders } from '../lib/hooks.js';
-import { API_BASE, apiPost } from '../lib/api-client.js';
+import { ui } from '../lib/ui-tokens.js';
+import { useBranches, useVendors, usePurchaseOrders } from '../lib/hooks.js';
+import { API_BASE, apiPost, parseApiErrorBody } from '../lib/api-client.js';
 
 export function InventoryPage() {
   const { accessToken } = useAuth();
@@ -33,8 +35,9 @@ export function InventoryPage() {
     Authorization: `Bearer ${accessToken}`,
   }), [accessToken]);
 
-  const [branches, setBranches] = useState<any[]>([]);
+  const { data: branches = [] } = useBranches();
   const [branchId, setBranchId] = useState('');
+  const effectiveBranchId = branchId || branches[0]?.id || '';
 
   // === Stock Items (الخامات) ===
   const [stockItems, setStockItems] = useState<any[]>([]);
@@ -64,40 +67,36 @@ export function InventoryPage() {
   const [loading, setLoading] = useState(false);
 
   // === Fetch all data ===
-  const fetchBranches = async () => {
-    try { const r = await fetch(`${API_BASE}/branches`, { headers }); if (r.ok) { const d = await r.json(); setBranches(d); if (d.length > 0 && !branchId) setBranchId(d[0].id); } } catch {}
-  };
   const fetchStockItems = async () => {
-    if (!branchId) return;
-    try { const r = await fetch(`${API_BASE}/stock-items?branchId=${branchId}`, { headers }); if (r.ok) setStockItems(await r.json()); } catch {}
+    if (!effectiveBranchId) return;
+    try { const r = await fetch(`${API_BASE}/stock-items?branchId=${effectiveBranchId}`, { headers }); if (r.ok) setStockItems(await r.json()); } catch {}
   };
   const fetchWarehouses = async () => {
-    if (!branchId) return;
-    try { const r = await fetch(`${API_BASE}/warehouses?branchId=${branchId}`, { headers }); if (r.ok) setWarehouses(await r.json()); } catch {}
+    if (!effectiveBranchId) return;
+    try { const r = await fetch(`${API_BASE}/warehouses?branchId=${effectiveBranchId}`, { headers }); if (r.ok) setWarehouses(await r.json()); } catch {}
   };
   const fetchUnits = async () => {
     try { const r = await fetch(`${API_BASE}/units`, { headers }); if (r.ok) setUnits(await r.json()); } catch {}
   };
   const fetchProducts = async () => {
-    if (!branchId) return;
-    try { const r = await fetch(`${API_BASE}/products?branchId=${branchId}`, { headers }); if (r.ok) setProducts(await r.json()); } catch {}
+    if (!effectiveBranchId) return;
+    try { const r = await fetch(`${API_BASE}/products?branchId=${effectiveBranchId}`, { headers }); if (r.ok) setProducts(await r.json()); } catch {}
   };
   const fetchRecipes = async () => {
-    if (!branchId) return;
-    try { const r = await fetch(`${API_BASE}/recipes?branchId=${branchId}`, { headers }); if (r.ok) setRecipes(await r.json()); } catch {}
+    if (!effectiveBranchId) return;
+    try { const r = await fetch(`${API_BASE}/recipes?branchId=${effectiveBranchId}`, { headers }); if (r.ok) setRecipes(await r.json()); } catch {}
   };
   const fetchVersions = async (recipeId: string) => {
     if (!recipeId) return;
     try { const r = await fetch(`${API_BASE}/recipes/${recipeId}/versions`, { headers }); if (r.ok) setVersions(await r.json()); } catch {}
   };
 
-  useEffect(() => { fetchBranches(); }, []);
   useEffect(() => {
-    if (branchId) {
+    if (effectiveBranchId) {
       fetchStockItems(); fetchWarehouses(); fetchUnits();
       fetchProducts(); fetchRecipes();
     }
-  }, [branchId]);
+  }, [effectiveBranchId]);
 
   // === Stock Item CRUD ===
   const createStockItem = async () => {
@@ -107,7 +106,7 @@ export function InventoryPage() {
       const res = await fetch(`${API_BASE}/stock-items`, {
         method: 'POST', headers,
         body: JSON.stringify({
-          branchId, warehouseId: stockItemForm.warehouseId || warehouses[0]?.id || '',
+          branchId: effectiveBranchId, warehouseId: stockItemForm.warehouseId || warehouses[0]?.id || '',
           unitId: stockItemForm.unitId || units[0]?.id || '',
           name: stockItemForm.name.trim(), code: stockItemForm.code.trim(),
           averageCost: Number(stockItemForm.averageCost) || 0,
@@ -169,7 +168,7 @@ export function InventoryPage() {
     try {
       const res = await fetch(`${API_BASE}/recipes`, {
         method: 'POST', headers,
-        body: JSON.stringify({ branchId, productId: recipeForm.productId, name: recipeForm.name.trim() }),
+        body: JSON.stringify({ branchId: effectiveBranchId, productId: recipeForm.productId, name: recipeForm.name.trim() }),
       });
       if (res.ok) {
         setMsg('✅ تم إضافة الوصفة');
@@ -217,10 +216,10 @@ export function InventoryPage() {
 
   // === Stats ===
   const stats = useMemo(() => [
-    { label: 'الخامات', value: String(stockItems.length), note: 'صنف مخزني', progress: 60, tone: '#1d4ed8' },
-    { label: 'المستودعات', value: String(warehouses.length), note: 'مستودع', progress: 100, tone: '#0f766e' },
-    { label: 'الوصفات', value: String(recipes.length), note: 'وصفات مسجلة', progress: recipes.length > 0 ? 80 : 0, tone: '#7c3aed' },
-    { label: 'منتجات كتالوج', value: String(products.length), note: 'صنف متاح', progress: 45, tone: '#b45309' },
+    { label: 'الخامات', value: String(stockItems.length), note: 'صنف مخزني', progress: 60, tone: 'info' },
+    { label: 'المستودعات', value: String(warehouses.length), note: 'مستودع', progress: 100, tone: 'success' },
+    { label: 'الوصفات', value: String(recipes.length), note: 'وصفات مسجلة', progress: recipes.length > 0 ? 80 : 0, tone: 'primary' },
+    { label: 'منتجات كتالوج', value: String(products.length), note: 'صنف متاح', progress: 45, tone: 'warning' },
   ], [stockItems, warehouses, recipes, products]);
 
   return (
@@ -239,7 +238,7 @@ export function InventoryPage() {
         description="إدارة الأصناف المخزنية الأساسية (المكونات)"
         action={<Button variant="contained" onClick={() => setStockItemDialog(true)}>إضافة خامة</Button>}
       >
-        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -274,7 +273,7 @@ export function InventoryPage() {
         description="ربط المنتجات النهائية بالمكونات المخزنية لخصم التلقائي عند البيع"
         action={<Button variant="contained" onClick={() => setRecipeDialog(true)}>إضافة وصفة</Button>}
       >
-        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+        <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
           <Table size="small">
             <TableHead>
               <TableRow>
@@ -314,7 +313,7 @@ export function InventoryPage() {
             <Typography variant="h6" fontWeight={800} sx={{ mb: 1 }}>
               إصدارات: {recipes.find((r: any) => r.id === selectedRecipeId)?.name}
             </Typography>
-            <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+            <Paper elevation={0} sx={{ borderRadius: 4, overflow: 'hidden', border: `1px solid ${ui.border}` }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -342,7 +341,7 @@ export function InventoryPage() {
 
             {/* مكونات الإصدار المحدد */}
             {selectedVersion?.components && selectedVersion.components.length > 0 && (
-              <Paper elevation={0} sx={{ mt: 2, p: 2, borderRadius: 4, border: '1px solid rgba(117, 89, 77, 0.12)' }}>
+              <Paper elevation={0} sx={{ mt: 2, p: 2, borderRadius: 4, border: `1px solid ${ui.border}` }}>
                 <Typography variant="subtitle1" fontWeight={800}>مكونات REV-{selectedVersion.versionNumber}</Typography>
                 <Table size="small">
                   <TableHead>
@@ -462,27 +461,37 @@ export function InventoryPage() {
       </Dialog>
 
       <SectionCard title="الموردين وأوامر الشراء" description="إدارة الموردين واستلام البضاعة إلى المخزون.">
-        <PurchasingPanel branchId={branchId} warehouses={warehouses} accessToken={accessToken} />
+        <PurchasingPanel branchId={effectiveBranchId} warehouses={warehouses} accessToken={accessToken} />
       </SectionCard>
     </Stack>
   );
 }
 
 function PurchasingPanel({ branchId, warehouses, accessToken }: { branchId: string; warehouses: any[]; accessToken?: string | null }) {
-  const { data: vendors = [], refetch: refetchVendors } = useVendors(branchId);
+  const queryClient = useQueryClient();
+  const { data: vendors = [], refetch: refetchVendors, isError: vendorsError, error: vendorsLoadError, isLoading: vendorsLoading } = useVendors(branchId);
   const { data: purchaseOrders = [], refetch: refetchPOs } = usePurchaseOrders(branchId);
   const [vendorName, setVendorName] = useState('');
   const [vendorCode, setVendorCode] = useState('');
   const [msg, setMsg] = useState('');
+  const [vendorError, setVendorError] = useState('');
 
   const createVendor = async () => {
     if (!accessToken || !vendorName.trim()) return;
+    if (!branchId) {
+      setVendorError('انتظر تحميل الفرع ثم حاول مرة أخرى.');
+      return;
+    }
+    setVendorError('');
     const res = await apiPost('/vendors', { branchId, name: vendorName, code: vendorCode || vendorName.slice(0, 6).toUpperCase() }, accessToken);
     if (res.ok) {
       setVendorName('');
       setVendorCode('');
-      refetchVendors();
+      void refetchVendors();
+      void queryClient.invalidateQueries({ queryKey: ['vendors'] });
       setMsg('تم إضافة المورد.');
+    } else {
+      setVendorError(parseApiErrorBody(res.body, res.error ?? 'فشل إضافة المورد'));
     }
   };
 
@@ -498,10 +507,16 @@ function PurchasingPanel({ branchId, warehouses, accessToken }: { branchId: stri
   return (
     <Stack spacing={2}>
       {msg ? <Alert severity="success" onClose={() => setMsg('')}>{msg}</Alert> : null}
+      {vendorError ? <Alert severity="error" onClose={() => setVendorError('')}>{vendorError}</Alert> : null}
+      {vendorsError ? (
+        <Alert severity="error">
+          {vendorsLoadError instanceof Error ? vendorsLoadError.message : 'تعذّر تحميل قائمة الموردين'}
+        </Alert>
+      ) : null}
       <Stack direction={{ xs: 'column', md: 'row' }} spacing={1}>
         <TextField label="اسم المورد" size="small" value={vendorName} onChange={(e) => setVendorName(e.target.value)} />
         <TextField label="الكود" size="small" value={vendorCode} onChange={(e) => setVendorCode(e.target.value)} />
-        <Button variant="contained" onClick={createVendor}>إضافة مورد</Button>
+        <Button variant="contained" onClick={createVendor} disabled={!branchId}>إضافة مورد</Button>
       </Stack>
       <Table size="small">
         <TableHead>
@@ -512,9 +527,15 @@ function PurchasingPanel({ branchId, warehouses, accessToken }: { branchId: stri
           </TableRow>
         </TableHead>
         <TableBody>
-          {vendors.map((v: any) => (
-            <TableRow key={v.id}><TableCell>{v.name}</TableCell><TableCell>{v.code}</TableCell><TableCell>{v.phone ?? '—'}</TableCell></TableRow>
-          ))}
+          {vendorsLoading ? (
+            <TableRow><TableCell colSpan={3}>جاري التحميل…</TableCell></TableRow>
+          ) : !vendors.length && !vendorsError ? (
+            <TableRow><TableCell colSpan={3}>لا يوجد موردون بعد.</TableCell></TableRow>
+          ) : (
+            vendors.map((v: any) => (
+              <TableRow key={v.id}><TableCell>{v.name}</TableCell><TableCell>{v.code}</TableCell><TableCell>{v.phone ?? '—'}</TableCell></TableRow>
+            ))
+          )}
         </TableBody>
       </Table>
       <Typography variant="subtitle1" fontWeight={800}>أوامر الشراء</Typography>
