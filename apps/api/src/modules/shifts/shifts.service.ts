@@ -223,23 +223,24 @@ export class ShiftsService {
   }
 
   async openShift(openDto: OpenShiftDto, userId: string) {
-    const existing = await this.prisma.shift.findFirst({
-      where: { branchId: openDto.branchId, cashBoxId: openDto.cashBoxId, status: 'OPEN' },
-    });
-    if (existing) {
-      throw new BadRequestException('An open shift already exists for this cash box');
-    }
-
     const branch = await this.prisma.branch.findUnique({ where: { id: openDto.branchId } });
     if (!branch) {
       throw new NotFoundException('Branch not found');
     }
 
-    const shiftNumber = await this.sequenceService.getNextNumber(branch.organizationId, 'SHIFT', openDto.branchId);
     const openingFloat = openDto.openingFloat ?? 0;
     const openedAt = new Date();
 
     const txResult = await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.shift.findFirst({
+        where: { branchId: openDto.branchId, cashBoxId: openDto.cashBoxId, status: 'OPEN' },
+      });
+      if (existing) {
+        throw new BadRequestException('يوجد وردية مفتوحة على هذه الخزنة بالفعل');
+      }
+
+      const shiftNumber = await this.sequenceService.getNextNumber(branch.organizationId, 'SHIFT', openDto.branchId);
+
       const shift = await tx.shift.create({
         data: {
           branchId: openDto.branchId,
@@ -588,7 +589,15 @@ export class ShiftsService {
         });
       }
 
-      return { shift, closing, successor, transferredCount, cashHandoffId };
+      const closedDuplicates = await this.closeEmptyDuplicateOpenShifts(
+        tx,
+        shiftRecord.cashBoxId,
+        closeDto.shiftId,
+        closedAt,
+        userId,
+      );
+
+      return { shift, closing, successor, transferredCount, cashHandoffId, closedDuplicates };
     }, { maxWait: 15_000, timeout: 120_000 });
 
     return {
@@ -597,6 +606,7 @@ export class ShiftsService {
       summary,
       successorShift: txResult.successor,
       cashHandoffId: txResult.cashHandoffId,
+      closedDuplicates: txResult.closedDuplicates,
       handoff: {
         mode: handoffMode,
         targetShiftId,
@@ -606,6 +616,47 @@ export class ShiftsService {
         handedByName: handoffMode === 'defer' ? handedByName : null,
       },
     };
+  }
+
+  private async closeEmptyDuplicateOpenShifts(
+    tx: Prisma.TransactionClient,
+    cashBoxId: string,
+    keepShiftId: string,
+    closedAt: Date,
+    userId: string,
+  ) {
+    const empties = await tx.shift.findMany({
+      where: {
+        cashBoxId,
+        status: 'OPEN',
+        id: { not: keepShiftId },
+        orders: { none: {} },
+        treasuryEntries: { none: {} },
+        cashierExpenses: { none: {} },
+      },
+      select: { id: true, shiftNumber: true },
+    });
+
+    for (const phantom of empties) {
+      await tx.shift.update({
+        where: { id: phantom.id },
+        data: { status: 'CLOSED', closedAt },
+      });
+      await tx.shiftClosing.create({
+        data: {
+          shiftId: phantom.id,
+          createdById: userId,
+          expectedCash: 0,
+          countedCash: 0,
+          varianceAmount: 0,
+          ordersCount: 0,
+          totalSales: 0,
+          note: `إغلاق تلقائي — وردية مكررة فارغة (${phantom.shiftNumber})`,
+        },
+      });
+    }
+
+    return empties.length;
   }
 
   private async countTransferableOrders(shiftId: string) {

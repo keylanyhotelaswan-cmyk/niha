@@ -11,8 +11,12 @@ describe('ShiftsService', () => {
     shift: { findFirst: jest.fn() },
     branch: { findUnique: jest.fn() },
     $transaction: jest.fn((fn) => fn({
-      shift: { create: jest.fn().mockResolvedValue({ id: 'shift-1', openingFloat: 100 }) },
+      shift: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'shift-1', openingFloat: 100, cashBox: {}, openedBy: {} }),
+      },
       shiftOpening: { create: jest.fn() },
+      shiftCashHandoff: { findFirst: jest.fn().mockResolvedValue(null) },
     })),
   };
 
@@ -29,7 +33,14 @@ describe('ShiftsService', () => {
   });
 
   it('rejects opening when shift already open', async () => {
-    prismaMock.shift.findFirst.mockResolvedValue({ id: 'existing' });
+    prismaMock.$transaction.mockImplementationOnce((fn) => fn({
+      shift: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing' }),
+        create: jest.fn(),
+      },
+      shiftOpening: { create: jest.fn() },
+    }));
+    prismaMock.branch.findUnique.mockResolvedValue({ id: 'b1', organizationId: 'org-1' });
 
     await expect(
       service.openShift({ branchId: 'b1', cashBoxId: 'cb1', openingFloat: 100 }, 'user-1'),
@@ -37,12 +48,11 @@ describe('ShiftsService', () => {
   });
 
   it('opens shift with sequence number', async () => {
-    prismaMock.shift.findFirst.mockResolvedValue(null);
     prismaMock.branch.findUnique.mockResolvedValue({ id: 'b1', organizationId: 'org-1' });
 
-    const result = await service.openShift({ branchId: 'b1', cashBoxId: 'cb1', openingFloat: 250 }, 'user-1');
+    const result = await service.openShift({ branchId: 'b1', cashBoxId: 'cb1', openingFloat: 0 }, 'user-1');
 
     expect(sequenceMock.getNextNumber).toHaveBeenCalledWith('org-1', 'SHIFT', 'b1');
-    expect(result).toEqual({ id: 'shift-1', openingFloat: 100 });
+    expect(result).toEqual(expect.objectContaining({ id: 'shift-1', openingFloat: 100 }));
   });
 });
