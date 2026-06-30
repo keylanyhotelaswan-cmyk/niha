@@ -9,6 +9,8 @@ import { OpenShiftDto } from './dto/open-shift.dto.js';
 import { CloseShiftDto } from './dto/close-shift.dto.js';
 import { ShiftWalletTransferDto } from './dto/shift-wallet-transfer.dto.js';
 import { splitPosCatalogProducts } from './pos-catalog-sauces.js';
+
+const POS_CUSTOM_LINE_SKU = 'POS-CUSTOM';
 import {
   aggregateExpensesByPaymentMethod,
   aggregateShiftWalletTransfers,
@@ -1136,6 +1138,8 @@ export class ShiftsService {
       this.productionPlanService.getSummaryMap(branchId),
     ]);
 
+    const customLineProduct = await this.ensureCustomLineProduct(branchId, categories, products);
+
     const mappedProducts = products.map((product) => ({
       id: product.id,
       branchId: product.branchId,
@@ -1149,16 +1153,41 @@ export class ShiftsService {
     }));
 
     const { menuProducts, sauces } = splitPosCatalogProducts(mappedProducts, categories);
-    const productsWithPlan = menuProducts.map((product) => {
-      const plan = dailyPlanMap.get(product.id);
-      return plan ? { ...product, dailyPlan: plan } : product;
-    });
+    const productsWithPlan = menuProducts
+      .filter((product) => product.sku !== POS_CUSTOM_LINE_SKU)
+      .map((product) => {
+        const plan = dailyPlanMap.get(product.id);
+        return plan ? { ...product, dailyPlan: plan } : product;
+      });
 
     return {
       categories,
       products: productsWithPlan,
       sauces,
       paymentMethods,
+      customLineProduct: customLineProduct
+        ? { id: customLineProduct.id, name: customLineProduct.name }
+        : null,
     };
+  }
+
+  private async ensureCustomLineProduct(
+    branchId: string,
+    categories: Array<{ id: string }>,
+    products: Array<{ id: string; name: string; sku: string | null }>,
+  ) {
+    const existing = products.find((p) => p.sku === POS_CUSTOM_LINE_SKU);
+    if (existing) return existing;
+    if (!categories.length) return null;
+    return this.prisma.product.create({
+      data: {
+        branchId,
+        categoryId: categories[0]!.id,
+        name: 'صنف يدوي',
+        sku: POS_CUSTOM_LINE_SKU,
+        salePrice: 0,
+        isAvailable: true,
+      },
+    });
   }
 }

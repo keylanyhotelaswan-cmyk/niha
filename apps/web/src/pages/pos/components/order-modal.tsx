@@ -20,7 +20,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material';
-import { getCollectionStatusLabel, validateTakeawayOrderFields, type CartItem, type CollectionStatus, type OrderType } from '../../../lib/pos-store.js';
+import { getCollectionStatusLabel, validateTakeawayOrderFields, cartLineKey, type CartItem, type CollectionStatus, type OrderType } from '../../../lib/pos-store.js';
 import type { PaymentMethodOption } from '../constants.js';
 import { collectionTone, formatCurrency } from '../utils.js';
 import { cardSx, ui } from '../../../lib/ui-tokens.js';
@@ -70,8 +70,11 @@ type OrderModalProps = {
   cartItems: CartItem[];
   cartQtyMap: Map<string, number>;
   onAddProduct: (p: any) => void;
-  onUpdateQty: (id: string, qty: number, productMeta?: { name: string; dailyPlan?: DailyPlan }) => void;
-  onUpdateNote: (id: string, note: string) => void;
+  onUpdateQty: (lineKey: string, qty: number, productMeta?: { name: string; dailyPlan?: DailyPlan }) => void;
+  onUpdateUnitPrice: (lineKey: string, unitPrice: number) => void;
+  onUpdateNote: (lineKey: string, note: string) => void;
+  onAddCustomLine?: (name: string, unitPrice: number) => boolean;
+  customLineProductId?: string | null;
   paymentMethods: PaymentMethodOption[];
   paymentMethod: string;
   onPaymentMethod: (v: string) => void;
@@ -82,7 +85,7 @@ type OrderModalProps = {
   onOrderNote: (v: string) => void;
   sauces?: Array<{ id: string; name: string }>;
   paidSauceProductIds?: string[];
-  onToggleItemSauce?: (productId: string, sauceName: string) => void;
+  onToggleItemSauce?: (lineKey: string, sauceName: string) => void;
   subtotal: number;
   discount: number;
   total: number;
@@ -220,6 +223,7 @@ export function OrderModal(props: OrderModalProps) {
     });
   };
   const handleCloseOrder = () => {
+    if (closingBusy) return;
     const check = props.validateTakeawayCustomer?.();
     if (check && !check.ok) {
       setShowFieldErrors(true);
@@ -229,7 +233,10 @@ export function OrderModal(props: OrderModalProps) {
     setShowFieldErrors(false);
     setValidationError('');
     setConfirmOpen(false);
-    void props.onCloseOrder();
+    setClosingBusy(true);
+    void Promise.resolve(props.onCloseOrder()).finally(() => {
+      setClosingBusy(false);
+    });
   };
 
   const openReview = () => {
@@ -246,6 +253,10 @@ export function OrderModal(props: OrderModalProps) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [validationError, setValidationError] = useState('');
   const [showFieldErrors, setShowFieldErrors] = useState(false);
+  const [closingBusy, setClosingBusy] = useState(false);
+  const [customLineOpen, setCustomLineOpen] = useState(false);
+  const [customLineName, setCustomLineName] = useState('');
+  const [customLinePrice, setCustomLinePrice] = useState('0');
   const drivers = props.deliveryDrivers ?? [];
   const paidSauceIds = new Set(props.paidSauceProductIds ?? []);
   const takeawayCheck = validateTakeawayOrderFields(props.orderType, props.orderOwnerName, props.customerPhone);
@@ -328,6 +339,23 @@ export function OrderModal(props: OrderModalProps) {
                 <Grid2 size={{ xs: 12, sm: 6 }}>
                   <TextField size="small" fullWidth placeholder="ابحث عن صنف..." value={props.productSearch} onChange={(e) => props.onProductSearch(e.target.value)} />
                 </Grid2>
+                {props.customLineProductId && props.onAddCustomLine ? (
+                  <Grid2 size={{ xs: 12, sm: 6 }}>
+                    <Button
+                      fullWidth
+                      variant="outlined"
+                      size="small"
+                      sx={{ height: 40, fontWeight: 700 }}
+                      onClick={() => {
+                        setCustomLineName('');
+                        setCustomLinePrice('0');
+                        setCustomLineOpen(true);
+                      }}
+                    >
+                      + صنف يدوي
+                    </Button>
+                  </Grid2>
+                ) : null}
                 <Grid2 size={{ xs: 12, sm: 6 }}>
                   <CustomerPhoneField
                     branchId={props.branchId}
@@ -478,12 +506,14 @@ export function OrderModal(props: OrderModalProps) {
                 ) : (
                   <Stack spacing={1}>
                     {props.cartItems.map((item) => {
+                      const lineKey = cartLineKey(item);
+                      const isCustomLine = props.customLineProductId != null && item.productId === props.customLineProductId;
                       const plan = productMetaMap.get(item.productId)?.dailyPlan;
                       const soldAdj = plan ? planSoldAdjustment(isEdit, editBaselineQty.get(item.productId) ?? 0) : 0;
                       const planLabel = plan ? planStatusLabel(plan, item.quantity, soldAdj) : null;
                       const planStatus = plan ? planVisualStatus(plan, item.quantity, soldAdj) : null;
                       return (
-                      <Paper key={item.productId} variant="outlined" sx={{
+                      <Paper key={lineKey} variant="outlined" sx={{
                         p: 1.25,
                         borderRadius: 2.5,
                         borderColor: planStatus === 'exceeded' ? 'error.main' : planStatus === 'low' || planStatus === 'exhausted' ? 'warning.main' : undefined,
@@ -505,18 +535,26 @@ export function OrderModal(props: OrderModalProps) {
                               size="small"
                               placeholder="ملاحظة الصنف"
                               value={item.note}
-                              onChange={(e) => props.onUpdateNote(item.productId, e.target.value)}
+                              onChange={(e) => props.onUpdateNote(lineKey, e.target.value)}
                               sx={{ flex: 1, minWidth: 100 }}
                             />
                             <Typography fontWeight={800} sx={{ ml: 'auto' }}>{formatCurrency(item.unitPrice * item.quantity)}</Typography>
                           </Stack>
-                          <Stack direction="row" spacing={0.5} alignItems="center">
-                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity - 1, getPlanMeta(item.productId, item.name))}>−</IconButton>
+                          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                            <IconButton size="small" onClick={() => props.onUpdateQty(lineKey, item.quantity - 1, getPlanMeta(item.productId, item.name))}>−</IconButton>
                             <Chip label={item.quantity} size="small" />
-                            <IconButton size="small" onClick={() => props.onUpdateQty(item.productId, item.quantity + 1, getPlanMeta(item.productId, item.name))}>+</IconButton>
-                            <Typography variant="caption" color="text.secondary">{formatCurrency(item.unitPrice)}</Typography>
+                            <IconButton size="small" onClick={() => props.onUpdateQty(lineKey, item.quantity + 1, getPlanMeta(item.productId, item.name))}>+</IconButton>
+                            <TextField
+                              size="small"
+                              type="number"
+                              label="السعر"
+                              value={item.unitPrice}
+                              onChange={(e) => props.onUpdateUnitPrice(lineKey, Number(e.target.value) || 0)}
+                              inputProps={{ min: 0, step: 0.5 }}
+                              sx={{ width: 110 }}
+                            />
                           </Stack>
-                          {props.sauces && props.sauces.length > 0 && !paidSauceIds.has(item.productId) ? (
+                          {props.sauces && props.sauces.length > 0 && !paidSauceIds.has(item.productId) && !isCustomLine ? (
                             <>
                               <Typography variant="caption" color="text.secondary" fontWeight={700}>
                                 صوصات (مجاناً)
@@ -526,13 +564,13 @@ export function OrderModal(props: OrderModalProps) {
                                 const selected = item.sauces?.includes(sauce.name) ?? false;
                                 return (
                                   <Chip
-                                    key={`${item.productId}-${sauce.id}`}
+                                    key={`${lineKey}-${sauce.id}`}
                                     label={sauce.name}
                                     size="small"
                                     clickable
                                     color={selected ? 'primary' : 'default'}
                                     variant={selected ? 'filled' : 'outlined'}
-                                    onClick={() => props.onToggleItemSauce?.(item.productId, sauce.name)}
+                                    onClick={() => props.onToggleItemSauce?.(lineKey, sauce.name)}
                                   />
                                 );
                               })}
@@ -597,11 +635,15 @@ export function OrderModal(props: OrderModalProps) {
         ) : null}
         <Button
           variant="contained"
-          disabled={props.cartItems.length === 0}
+          disabled={props.cartItems.length === 0 || closingBusy}
           onClick={isEdit ? () => void handleSaveEdit() : handleCloseOrder}
           sx={{ fontWeight: 800, px: 3 }}
         >
-          {isEdit ? `حفظ التعديلات · ${formatCurrency(props.total)}` : `إغلاق وتأكيد · ${formatCurrency(props.total)}`}
+          {closingBusy
+            ? 'جاري الإغلاق…'
+            : isEdit
+              ? `حفظ التعديلات · ${formatCurrency(props.total)}`
+              : `إغلاق وتأكيد · ${formatCurrency(props.total)}`}
         </Button>
         {!isEdit ? (
           <Button
@@ -634,8 +676,45 @@ export function OrderModal(props: OrderModalProps) {
         orderNote={props.orderNote}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={handleCloseOrder}
+        busy={closingBusy}
       />
       ) : null}
+
+      <Dialog open={customLineOpen} onClose={() => setCustomLineOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>إضافة صنف يدوي</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 1 }}>
+            <TextField
+              autoFocus
+              label="اسم الصنف"
+              value={customLineName}
+              onChange={(e) => setCustomLineName(e.target.value)}
+              fullWidth
+            />
+            <TextField
+              label="السعر"
+              type="number"
+              value={customLinePrice}
+              onChange={(e) => setCustomLinePrice(e.target.value)}
+              inputProps={{ min: 0, step: 0.5 }}
+              fullWidth
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCustomLineOpen(false)}>إلغاء</Button>
+          <Button
+            variant="contained"
+            disabled={!customLineName.trim()}
+            onClick={() => {
+              const ok = props.onAddCustomLine?.(customLineName, Number(customLinePrice) || 0);
+              if (ok) setCustomLineOpen(false);
+            }}
+          >
+            إضافة
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Dialog>
   );
 }

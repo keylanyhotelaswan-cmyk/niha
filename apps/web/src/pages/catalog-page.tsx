@@ -21,15 +21,17 @@ import {
   Typography,
 } from '@mui/material';
 import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { SectionCard, MetricCard } from './shared.js';
 import { cardSx, ui } from '../lib/ui-tokens.js';
 import { useAuth } from '../lib/auth-context.js';
-import { useBranches } from '../lib/hooks.js';
+import { invalidatePosQueries, useBranches } from '../lib/hooks.js';
 
 import { API_BASE } from '../lib/api-client.js';
 
 export function CatalogPage() {
   const { accessToken } = useAuth();
+  const queryClient = useQueryClient();
   const { data: branchList = [] } = useBranches();
   const headers = useMemo(() => ({
     'Content-Type': 'application/json',
@@ -208,6 +210,7 @@ export function CatalogPage() {
       setRecipeAction('none');
       setSelectedRecipeId('');
       fetchProducts();
+      invalidatePosQueries(queryClient);
     } catch { setMsg('❌ فشل الاتصال'); }
     setLoading(false);
     setSnack(true);
@@ -220,7 +223,10 @@ export function CatalogPage() {
         headers,
         body: JSON.stringify({ isAvailable: !current }),
       });
-      if (res.ok) fetchProducts();
+      if (res.ok) {
+        fetchProducts();
+        invalidatePosQueries(queryClient);
+      }
     } catch {}
   };
 

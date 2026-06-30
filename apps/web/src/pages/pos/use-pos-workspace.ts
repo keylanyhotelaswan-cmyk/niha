@@ -340,36 +340,35 @@ export function usePosWorkspace() {
     }
   };
 
-  const collectOrder = (
+  const collectOrder = async (
     order: SavedOrder,
     paymentMethodId: string,
     onError?: (message: string) => void,
-  ): { ok: true } | { ok: false; error: string } => {
+  ): Promise<{ ok: true } | { ok: false; error: string }> => {
     if (!accessToken) return { ok: false, error: 'غير مسجل' };
     const shiftId = effectiveShiftId ?? shift?.id;
     if (shiftId) {
       patchShiftOrderCollected(queryClient, shiftId, order.id);
     }
 
-    void (async () => {
-      const res = await apiCollectClosedOrder(order.id, {
-        paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
-        amount: order.total,
-      }, accessToken);
-      if (res.ok) {
-        void refetchPosOrderData(queryClient, shiftId);
-        return;
-      }
-      const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
-      if (shiftId) {
-        patchShiftOrderUncollected(queryClient, shiftId, order.id);
-        void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
-        void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
-      }
-      onError?.(message);
-    })();
+    const res = await apiCollectClosedOrder(order.id, {
+      paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
+      amount: order.total,
+    }, accessToken);
 
-    return { ok: true };
+    if (res.ok) {
+      void refetchPosOrderData(queryClient, shiftId);
+      return { ok: true };
+    }
+
+    const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
+    if (shiftId) {
+      patchShiftOrderUncollected(queryClient, shiftId, order.id);
+      void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
+      void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
+    }
+    onError?.(message);
+    return { ok: false, error: message };
   };
 
   const createExpense = async (dto: {

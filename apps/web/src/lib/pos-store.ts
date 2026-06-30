@@ -2,7 +2,12 @@ import { parseItemNote } from './pos-order-sauces.js';
 import { formatOrderTimestamp } from './date-utils.js';
 import { isValidCustomerPhone } from './customer-phone.js';
 
+/** صنف placeholder في الكتالوج لأسطر يدوية (اسم + سعر مخصّص) */
+export const POS_CUSTOM_LINE_SKU = 'POS-CUSTOM';
+
 export type CartItem = {
+  /** مفتاح فريد للسطر — يختلف عن productId للأصناف اليدوية المتعددة */
+  lineId?: string;
   productId: string;
   name: string;
   unitPrice: number;
@@ -10,6 +15,10 @@ export type CartItem = {
   note: string;
   sauces?: string[];
 };
+
+export function cartLineKey(item: Pick<CartItem, 'lineId' | 'productId'>): string {
+  return item.lineId ?? item.productId;
+}
 
 export type OrderType = 'eat-in' | 'takeaway';
 export type CollectionStatus = 'pending_approval' | 'uncollected' | 'approved';
@@ -173,12 +182,13 @@ export function mapApiOrderToSavedOrder(
     createdBy?: { fullName?: string | null; username?: string | null } | null;
     _count?: { items?: number };
     items?: Array<{
+      id?: string;
       productId: string;
       unitPrice: unknown;
       quantity: unknown;
       note?: string | null;
       notes?: Array<{ note?: string | null }>;
-      product?: { name?: string } | null;
+      product?: { name?: string; sku?: string | null } | null;
     }>;
   },
   status: SavedOrder['status'],
@@ -205,15 +215,29 @@ export function mapApiOrderToSavedOrder(
       : {}),
     discountAmount: String(order.discountAmount ?? 0),
     orderNote: order.note ?? '',
-    items: (order.items ?? []).map((item) => {
+    items: (order.items ?? []).map((item, index) => {
       const rawNote = resolveOrderItemNote(item);
       const parsed = parseItemNote(rawNote);
+      const isCustomLine = item.product?.sku === POS_CUSTOM_LINE_SKU;
+      let name = item.product?.name ?? 'صنف';
+      let userNote = parsed.userNote;
+      if (isCustomLine && rawNote.trim()) {
+        const splitIdx = rawNote.indexOf(' · ');
+        if (splitIdx >= 0) {
+          name = rawNote.slice(0, splitIdx).trim() || name;
+          userNote = parseItemNote(rawNote.slice(splitIdx + 3)).userNote;
+        } else if (!parsed.sauces.length) {
+          name = rawNote.trim();
+          userNote = '';
+        }
+      }
       return {
+        lineId: item.id ?? `${item.productId}-${index}`,
         productId: item.productId,
-        name: item.product?.name ?? 'صنف',
+        name,
         unitPrice: Number(item.unitPrice),
         quantity: Number(item.quantity),
-        note: parsed.userNote,
+        note: userNote,
         sauces: parsed.sauces,
       };
     }),

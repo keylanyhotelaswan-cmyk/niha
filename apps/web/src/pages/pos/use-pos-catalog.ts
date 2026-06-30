@@ -47,6 +47,7 @@ export function usePosCatalog(branchId: string, accessToken: string | null) {
     products,
     sauces,
     paidSauceProductIds,
+    customLineProductId: data?.customLineProduct?.id ?? null,
     paymentMethods,
     activeCategory,
     setActiveCategory,

@@ -13,7 +13,7 @@ import {
 } from '@mui/material';
 import { formatItemNote } from '../../../lib/pos-order-sauces.js';
 import type { CartItem, CollectionStatus, OrderType } from '../../../lib/pos-store.js';
-import { getCollectionStatusLabel, validateTakeawayOrderFields } from '../../../lib/pos-store.js';
+import { cartLineKey, getCollectionStatusLabel, validateTakeawayOrderFields } from '../../../lib/pos-store.js';
 import type { PaymentMethodOption } from '../constants.js';
 import { collectionTone, formatCurrency } from '../utils.js';
 import { useEffect, useMemo, useState } from 'react';
@@ -130,7 +130,7 @@ export function OrderConfirmDialog(props: OrderConfirmDialogProps) {
             {props.cartItems.map((item) => {
               const itemNote = formatItemNote(item.note, item.sauces ?? []);
               return (
-              <Stack key={item.productId} direction="row" justifyContent="space-between" gap={1}>
+              <Stack key={cartLineKey(item)} direction="row" justifyContent="space-between" gap={1}>
                 <Typography variant="body2">
                   {item.quantity}× {item.name}
                   {itemNote ? ` (${itemNote})` : ''}

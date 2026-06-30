@@ -783,23 +783,51 @@ export class OrdersService {
       throw new BadRequestException('Payment method not found');
     }
 
-    const [pendingTreasury, collectionShiftId] = await Promise.all([
-      this.prisma.treasuryTransaction.count({
-        where: {
-          sourceType: 'ORDER',
-          sourceId: orderId,
-          transactionType: 'SALE_RECEIPT',
-          approvalStatus: 'PENDING',
-        },
-      }),
-      this.resolveCollectionShiftId(order),
-    ]);
+    const isCash = paymentMethod.type === 'CASH';
+    const amount = dto.amount ?? Number(order.totalAmount);
+
+    const collectionShiftId = await this.resolveCollectionShiftId(order);
+
+    const locked = await this.prisma.order.updateMany({
+      where: {
+        id: orderId,
+        status: 'CLOSED',
+        collectionStatus: 'UNCOLLECTED',
+      },
+      data: {
+        ...(collectionShiftId && collectionShiftId !== order.shiftId ? { shiftId: collectionShiftId } : {}),
+        collectionStatus: 'PENDING_APPROVAL',
+        approvalStatus: 'PENDING',
+        paymentStatus: 'PAID',
+        amountPaid: amount,
+        amountDue: 0,
+      },
+    });
+    if (locked.count === 0) {
+      const current = await this.prisma.order.findUnique({
+        where: { id: orderId },
+        select: { collectionStatus: true, status: true },
+      });
+      if (current?.collectionStatus === 'APPROVED') {
+        throw new BadRequestException('Order is already collected');
+      }
+      if (current?.collectionStatus === 'PENDING_APPROVAL') {
+        throw new BadRequestException('Order is already waiting for treasury approval');
+      }
+      throw new BadRequestException('Order cannot be collected');
+    }
+
+    const pendingTreasury = await this.prisma.treasuryTransaction.count({
+      where: {
+        sourceType: 'ORDER',
+        sourceId: orderId,
+        transactionType: 'SALE_RECEIPT',
+        approvalStatus: 'PENDING',
+      },
+    });
     if (pendingTreasury > 0) {
       throw new BadRequestException('Order already has a pending treasury receipt');
     }
-
-    const isCash = paymentMethod.type === 'CASH';
-    const amount = dto.amount ?? Number(order.totalAmount);
 
     await this.treasuryService.recordSaleReceipt({
       branchId: order.branchId,
@@ -816,18 +844,13 @@ export class OrdersService {
       note: `تحصيل طلب ${order.orderNumber}`,
     });
 
-    const updated = await this.prisma.order.update({
+    const updated = await this.prisma.order.findUnique({
       where: { id: orderId },
-      data: {
-        ...(collectionShiftId && collectionShiftId !== order.shiftId ? { shiftId: collectionShiftId } : {}),
-        collectionStatus: 'PENDING_APPROVAL',
-        approvalStatus: 'PENDING',
-        paymentStatus: 'PAID',
-        amountPaid: amount,
-        amountDue: 0,
-      },
       include: { items: true, payments: true },
     });
+    if (!updated) {
+      throw new NotFoundException('Order not found');
+    }
 
     if (isCash) {
       await this.prisma.orderPayment.updateMany({

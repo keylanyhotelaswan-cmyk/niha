@@ -3,7 +3,7 @@ import { apiCloseShift, apiGetCustomer, apiListCustomers, apiListOrdersByShift }
 import { apiGet, apiPost, parseApiErrorBody } from './api-client.js';
 import { useAuth } from './auth-context.js';
 import { isApiOrderUncollected } from './pos-store.js';
-import { readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
+import { clearPosCatalogCache, readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
 
 function token(accessToken: string | null | undefined) {
   return accessToken ?? undefined;
@@ -21,6 +21,7 @@ export const POS_QUERY_KEYS = {
 export type ShiftOrdersPage = { orders: any[]; nextCursor: string | null };
 
 export function invalidatePosQueries(queryClient: ReturnType<typeof useQueryClient>) {
+  clearPosCatalogCache();
   queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.context });
   queryClient.invalidateQueries({ queryKey: ['pos-shift-summary'] });
   queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected'] });
@@ -279,6 +280,7 @@ export type PosCatalogData = {
   products: unknown[];
   sauces: Array<{ id: string; name: string; isAvailable?: boolean }>;
   paymentMethods: Array<{ code: string; name: string }>;
+  customLineProduct?: { id: string; name: string } | null;
 };
 
 export function usePosCatalog(branchId?: string) {
@@ -294,7 +296,8 @@ export function usePosCatalog(branchId?: string) {
       return data;
     },
     enabled: !!accessToken && !!branchId,
-    staleTime: 300000,
+    staleTime: 60_000,
+    refetchOnMount: 'always',
     ...(cached ? { placeholderData: cached } : {}),
   });
 }

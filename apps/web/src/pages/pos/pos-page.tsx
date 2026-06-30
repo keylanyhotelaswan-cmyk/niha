@@ -79,6 +79,8 @@ export function PosPage() {
   const order = usePosOrderSession(workspace, {
     paymentMethods: catalog.paymentMethods,
     setActiveCategory: catalog.setActiveCategory,
+    reload: () => { void catalog.reload(); },
+    customLineProductId: catalog.customLineProductId,
     onNotify: (msg) => {
       setSnack(msg);
       if (msg.includes('أكبر من الخطة') || msg.includes('فوق الخطة')) setSnackSeverity('error');
@@ -102,6 +104,8 @@ export function PosPage() {
   const [collectOrder, setCollectOrder] = useState<SavedOrder | null>(null);
   const [collectPayment, setCollectPayment] = useState('cash');
   const [collectError, setCollectError] = useState('');
+  const [collectBusy, setCollectBusy] = useState(false);
+  const [shiftOpening, setShiftOpening] = useState(false);
   const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
   const collectInFlight = useRef(false);
   const queryClient = useQueryClient();
@@ -298,28 +302,31 @@ export function PosPage() {
     if (collectOpen) preloadPosPrintPipeline();
   }, [collectOpen]);
 
-  const runCollect = (withPrint: boolean) => {
-    if (!collectOrder || collectInFlight.current) return;
+  const runCollect = async (withPrint: boolean) => {
+    if (!collectOrder || collectInFlight.current || collectBusy) return;
     collectInFlight.current = true;
+    setCollectBusy(true);
 
     const order = collectOrder;
     const payment = collectPayment;
     const shiftId = workspace.effectiveShiftId;
 
-    setCollectOpen(false);
-    setCollectOrder(null);
-    setCollectError('');
-
-    const res = workspace.collectOrder(order, payment, (message) => {
+    const res = await workspace.collectOrder(order, payment, (message) => {
       notify(parseApiErrorBody(message, message));
       void workspace.refreshAfterOrder(shiftId);
     });
 
+    collectInFlight.current = false;
+    setCollectBusy(false);
+
     if (!res.ok) {
-      notify(res.error ?? 'فشل التحصيل');
-      collectInFlight.current = false;
+      setCollectError(res.error ?? 'فشل التحصيل');
       return;
     }
+
+    setCollectOpen(false);
+    setCollectOrder(null);
+    setCollectError('');
 
     notify(`تم تحصيل ${order.code} في الدرج`);
 
@@ -350,8 +357,6 @@ export function PosPage() {
         printFromOrder(order);
       }
     }
-
-    collectInFlight.current = false;
   };
 
   const shiftKnown = !workspace.shiftStatusPending;
@@ -574,7 +579,10 @@ export function PosPage() {
         cartQtyMap={cartQtyMap}
         onAddProduct={order.addProduct}
         onUpdateQty={order.updateQuantity}
+        onUpdateUnitPrice={order.updateUnitPrice}
         onUpdateNote={order.updateNote}
+        onAddCustomLine={order.addCustomLine}
+        customLineProductId={catalog.customLineProductId}
         paymentMethods={catalog.paymentMethods}
         paymentMethod={order.paymentMethod}
         onPaymentMethod={order.setPaymentMethod}
@@ -642,11 +650,12 @@ export function PosPage() {
         }}
       />
 
-      <Dialog open={collectOpen} onClose={() => { setCollectOpen(false); setCollectError(''); }} fullWidth maxWidth="xs">
+      <Dialog open={collectOpen} onClose={() => { if (!collectBusy) { setCollectOpen(false); setCollectError(''); } }} fullWidth maxWidth="xs">
         <DialogTitle>تسجيل تحصيل في الدرج</DialogTitle>
         <DialogContent>
           <Stack spacing={2} sx={{ pt: 1 }}>
             {collectError ? <Alert severity="error">{collectError}</Alert> : null}
+            {collectBusy ? <Alert severity="info">جاري تسجيل التحصيل…</Alert> : null}
             <TextField label="رقم الطلب" value={collectOrder?.code ?? ''} InputProps={{ readOnly: true }} />
             <TextField label="الإجمالي" value={collectOrder ? formatCurrency(collectOrder.total) : ''} InputProps={{ readOnly: true }} />
             <TextField select label="طريقة الدفع" value={collectPayment} onChange={(e) => setCollectPayment(e.target.value)}>
@@ -655,10 +664,14 @@ export function PosPage() {
           </Stack>
         </DialogContent>
         <DialogActions sx={{ flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }}>
-          <Button onClick={() => { setCollectOpen(false); setCollectError(''); }}>إلغاء</Button>
-          <Button variant="outlined" onClick={() => runCollect(false)}>تحصيل فقط</Button>
+          <Button onClick={() => { setCollectOpen(false); setCollectError(''); }} disabled={collectBusy}>إلغاء</Button>
+          <Button variant="outlined" disabled={collectBusy} onClick={() => void runCollect(false)}>
+            {collectBusy ? 'جاري التحصيل…' : 'تحصيل فقط'}
+          </Button>
           {canUsePrint ? (
-            <Button variant="contained" onClick={() => runCollect(true)}>تحصيل وطباعة</Button>
+            <Button variant="contained" disabled={collectBusy} onClick={() => void runCollect(true)}>
+              {collectBusy ? 'جاري التحصيل…' : 'تحصيل وطباعة'}
+            </Button>
           ) : null}
         </DialogActions>
       </Dialog>
@@ -829,20 +842,28 @@ export function PosPage() {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setShiftOpenDialog(false)}>إلغاء</Button>
-          <Button variant="contained" onClick={async () => {
-            const res = await workspace.openShift(Number(openingFloat) || 0);
-            if (res.ok) {
-              setShiftOpenDialog(false);
-              setOpeningFloat('0');
-              setPendingCashHandoff(null);
-              const handoffMsg = (res as { handoffMessage?: string }).handoffMessage;
-              if (handoffMsg) {
-                notify(handoffMsg);
-              } else {
-                notify((res.data as { created?: boolean })?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
-              }
-            } else notify((res as { body?: string; error?: string }).body ?? (res as { error?: string }).error ?? 'فشل فتح الوردية');
-          }}>فتح</Button>
+          <Button variant="contained" disabled={shiftOpening} onClick={async () => {
+            if (shiftOpening) return;
+            setShiftOpening(true);
+            try {
+              const res = await workspace.openShift(Number(openingFloat) || 0);
+              if (res.ok) {
+                setShiftOpenDialog(false);
+                setOpeningFloat('0');
+                setPendingCashHandoff(null);
+                const handoffMsg = (res as { handoffMessage?: string }).handoffMessage;
+                if (handoffMsg) {
+                  notify(handoffMsg);
+                } else {
+                  notify((res.data as { created?: boolean })?.created ? 'تم فتح وردية جديدة.' : 'الوردية مفتوحة.');
+                }
+              } else notify((res as { body?: string; error?: string }).body ?? (res as { error?: string }).error ?? 'فشل فتح الوردية');
+            } finally {
+              setShiftOpening(false);
+            }
+          }}>
+            {shiftOpening ? 'جاري الفتح…' : 'فتح'}
+          </Button>
         </DialogActions>
       </Dialog>
 

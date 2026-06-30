@@ -23,6 +23,7 @@ function preferTypeScriptSources(): Plugin {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '../../', '');
   const isElectron = env.VITE_ELECTRON === '1' || process.env.VITE_ELECTRON === '1';
+  const skipBrowserOpen = process.env.NIHA_SKIP_BROWSER_OPEN === '1';
 
   return {
     plugins: [preferTypeScriptSources(), react()],
@@ -30,6 +31,8 @@ export default defineConfig(({ mode }) => {
     server: {
       host: '0.0.0.0',
       port: 5173,
+      strictPort: true,
+      open: !isElectron && !skipBrowserOpen ? '/' : false,
     },
     preview: {
       host: '0.0.0.0',

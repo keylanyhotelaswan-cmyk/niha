@@ -19,6 +19,7 @@ import {
   mapOrderTypeToApi,
   mapPaymentMethodCode,
   validateTakeawayOrderFields,
+  cartLineKey,
   type CartItem,
   type CollectionStatus,
   type OrderType,
@@ -38,6 +39,8 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
   setActiveCategory: (c: string) => void;
   onNotify?: (msg: string) => void;
   getProductDailyPlan?: (productId: string) => DailyPlan | undefined;
+  reload?: () => void;
+  customLineProductId?: string | null;
 }) {
   const queryClient = useQueryClient();
   const {
@@ -71,6 +74,7 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
   const [autoPrint, setAutoPrint] = useState(() => isAutoPrintEnabled());
 
   const pendingRef = useRef({ openOrderId: null as string | null, cartItems: [] as CartItem[], accessToken: null as string | null });
+  const closeInFlight = useRef(false);
 
   useEffect(() => {
     pendingRef.current = { openOrderId, cartItems, accessToken };
@@ -107,9 +111,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     setEditBaselineQty(new Map());
   };
 
-  const toggleItemSauce = (productId: string, sauceName: string) => {
+  const toggleItemSauce = (lineKey: string, sauceName: string) => {
     setCartItems((cur) => cur.map((i) => {
-      if (i.productId !== productId) return i;
+      if (cartLineKey(i) !== lineKey) return i;
       const sauces = i.sauces ?? [];
       const next = sauces.includes(sauceName)
         ? sauces.filter((s) => s !== sauceName)
@@ -119,6 +123,13 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
   };
 
   const mapItemApiNote = (item: CartItem) => {
+    const customId = catalog.customLineProductId;
+    if (customId && item.productId === customId) {
+      const label = item.name.trim();
+      const extra = item.note.trim();
+      const note = extra ? `${label} · ${extra}` : label;
+      return note ? { note } : {};
+    }
     const note = itemNoteForApi(item);
     return note ? { note } : {};
   };
@@ -135,6 +146,7 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     resetOrder('eat-in');
     setProductSearch('');
     catalog.setActiveCategory(ALL_CATEGORIES);
+    catalog.reload?.();
     setModalOpen(true);
     return true;
   };
@@ -193,28 +205,64 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
   const addProduct = (product: { id: string; name: string; salePrice: number; isAvailable?: boolean; dailyPlan?: DailyPlan }) => {
     if (!product.isAvailable) return;
     setCartItems((cur) => {
-      const prevQty = cur.find((i) => i.productId === product.id)?.quantity ?? 0;
+      const prevQty = cur.find((i) => i.productId === product.id && !i.lineId)?.quantity ?? 0;
       const nextQty = prevQty + 1;
       notifyPlanChange(product, prevQty, nextQty);
-      const ex = cur.find((i) => i.productId === product.id);
-      if (ex) return cur.map((i) => i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i);
-      return [...cur, { productId: product.id, name: product.name, unitPrice: product.salePrice, quantity: 1, note: '', sauces: [] }];
-    });
-  };
-
-  const updateQuantity = (productId: string, qty: number, productMeta?: { name: string; dailyPlan?: DailyPlan }) => {
-    setCartItems((cur) => {
-      const prevQty = cur.find((i) => i.productId === productId)?.quantity ?? 0;
-      if (productMeta && qty > 0 && qty !== prevQty) {
-        notifyPlanChange({ id: productId, ...productMeta }, prevQty, qty);
+      const ex = cur.find((i) => i.productId === product.id && !i.lineId);
+      if (ex) {
+        return cur.map((i) => (
+          i.productId === product.id && !i.lineId ? { ...i, quantity: i.quantity + 1 } : i
+        ));
       }
-      if (qty <= 0) return cur.filter((i) => i.productId !== productId);
-      return cur.map((i) => i.productId === productId ? { ...i, quantity: qty } : i);
+      return [...cur, {
+        lineId: product.id,
+        productId: product.id,
+        name: product.name,
+        unitPrice: product.salePrice,
+        quantity: 1,
+        note: '',
+        sauces: [],
+      }];
     });
   };
 
-  const updateNote = (productId: string, note: string) => {
-    setCartItems((cur) => cur.map((i) => i.productId === productId ? { ...i, note } : i));
+  const addCustomLine = (name: string, unitPrice: number) => {
+    const customId = catalog.customLineProductId;
+    if (!customId || !name.trim() || unitPrice < 0) return false;
+    const lineId = `custom-${crypto.randomUUID()}`;
+    setCartItems((cur) => [...cur, {
+      lineId,
+      productId: customId,
+      name: name.trim(),
+      unitPrice,
+      quantity: 1,
+      note: '',
+      sauces: [],
+    }]);
+    return true;
+  };
+
+  const updateQuantity = (lineKey: string, qty: number, productMeta?: { name: string; dailyPlan?: DailyPlan }) => {
+    setCartItems((cur) => {
+      const prevQty = cur.find((i) => cartLineKey(i) === lineKey)?.quantity ?? 0;
+      if (productMeta && qty > 0 && qty !== prevQty) {
+        const item = cur.find((i) => cartLineKey(i) === lineKey);
+        notifyPlanChange({ id: item?.productId ?? lineKey, ...productMeta }, prevQty, qty);
+      }
+      if (qty <= 0) return cur.filter((i) => cartLineKey(i) !== lineKey);
+      return cur.map((i) => cartLineKey(i) === lineKey ? { ...i, quantity: qty } : i);
+    });
+  };
+
+  const updateUnitPrice = (lineKey: string, unitPrice: number) => {
+    if (!Number.isFinite(unitPrice) || unitPrice < 0) return;
+    setCartItems((cur) => cur.map((i) => (
+      cartLineKey(i) === lineKey ? { ...i, unitPrice } : i
+    )));
+  };
+
+  const updateNote = (lineKey: string, note: string) => {
+    setCartItems((cur) => cur.map((i) => cartLineKey(i) === lineKey ? { ...i, note } : i));
   };
 
   const mapCollectionApi = (s: CollectionStatus) => s === 'uncollected' ? 'UNCOLLECTED' as const : 'APPROVED' as const;
@@ -263,9 +311,12 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
   };
 
   const closeOrder = async () => {
+    if (closeInFlight.current) return { ok: false, error: 'جاري إغلاق الطلب…' };
     if (!ensureShift() || !accessToken || cartItems.length === 0) return { ok: false };
     const takeawayCheck = validateTakeawayCustomer();
     if (!takeawayCheck.ok) return takeawayCheck;
+
+    closeInFlight.current = true;
 
     const pmCode = mapPaymentMethodCode(paymentMethod);
     const noteText = orderNote.trim();
@@ -368,7 +419,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
       void queryClient.invalidateQueries({
         queryKey: POS_QUERY_KEYS.shiftSummary(shiftIdForRefresh),
       });
-    })();
+    })().finally(() => {
+      closeInFlight.current = false;
+    });
 
     return { ok: true, orderCode: orderCodeSnapshot, note: statusNote };
   };
@@ -526,7 +579,9 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     validateTakeawayCustomer,
     applyCustomerSuggestion,
     addProduct,
+    addCustomLine,
     updateQuantity,
+    updateUnitPrice,
     updateNote,
     openNewOrder,
     openEditOrder,
