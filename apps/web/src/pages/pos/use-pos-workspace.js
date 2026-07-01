@@ -246,31 +246,29 @@ export function usePosWorkspace() {
             return { ok: false, error: message };
         }
     };
-    const collectOrder = (order, paymentMethodId, onError) => {
+    const collectOrder = async (order, paymentMethodId, onError) => {
         if (!accessToken)
             return { ok: false, error: 'غير مسجل' };
         const shiftId = effectiveShiftId ?? shift?.id;
         if (shiftId) {
             patchShiftOrderCollected(queryClient, shiftId, order.id);
         }
-        void (async () => {
-            const res = await apiCollectClosedOrder(order.id, {
-                paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
-                amount: order.total,
-            }, accessToken);
-            if (res.ok) {
-                void refetchPosOrderData(queryClient, shiftId);
-                return;
-            }
-            const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
-            if (shiftId) {
-                patchShiftOrderUncollected(queryClient, shiftId, order.id);
-                void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
-                void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
-            }
-            onError?.(message);
-        })();
-        return { ok: true };
+        const res = await apiCollectClosedOrder(order.id, {
+            paymentMethodCode: mapPaymentMethodCode(paymentMethodId),
+            amount: order.total,
+        }, accessToken);
+        if (res.ok) {
+            void refetchPosOrderData(queryClient, shiftId);
+            return { ok: true };
+        }
+        const message = typeof res.body === 'string' ? res.body : res.error ?? 'فشل التحصيل';
+        if (shiftId) {
+            patchShiftOrderUncollected(queryClient, shiftId, order.id);
+            void queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected', shiftId] });
+            void queryClient.invalidateQueries({ queryKey: ['orders-shift-collected', shiftId] });
+        }
+        onError?.(message);
+        return { ok: false, error: message };
     };
     const createExpense = async (dto) => {
         if (!accessToken || !shift?.id)

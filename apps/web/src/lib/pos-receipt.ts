@@ -113,7 +113,30 @@ export function savePrinterName(name: string) {
   }
 }
 
+export function consolidateKitchenReceiptItems(
+  items: Array<{ name: string; quantity: number; note?: string }>,
+) {
+  const merged = new Map<string, { name: string; quantity: number; note?: string }>();
+  for (const item of items) {
+    const note = item.note ?? '';
+    const key = `${item.name}\0${note}`;
+    const prev = merged.get(key);
+    if (prev) prev.quantity += item.quantity;
+    else merged.set(key, { name: item.name, quantity: item.quantity, ...(note ? { note } : {}) });
+  }
+  return [...merged.values()];
+}
+
 export function kitchenFromReceipt(data: ReceiptData): KitchenReceiptData {
+  const kitchenItems = data.items.map((i) => {
+    const kitchenNote = kitchenItemNote(i.note ?? '', i.sauces ?? []);
+    return {
+      name: i.name,
+      quantity: i.quantity,
+      ...(kitchenNote ? { note: kitchenNote } : {}),
+    };
+  });
+
   return {
     orderNumber: data.orderNumber,
     cashierName: data.cashierName,
@@ -123,14 +146,7 @@ export function kitchenFromReceipt(data: ReceiptData): KitchenReceiptData {
     ...(data.customerPhone ? { customerPhone: data.customerPhone } : {}),
     ...(data.customerAddress ? { customerAddress: data.customerAddress } : {}),
     ...(data.captainName ? { captainName: data.captainName } : {}),
-    items: data.items.map((i) => {
-      const kitchenNote = kitchenItemNote(i.note ?? '', i.sauces ?? []);
-      return {
-        name: i.name,
-        quantity: i.quantity,
-        ...(kitchenNote ? { note: kitchenNote } : {}),
-      };
-    }),
+    items: consolidateKitchenReceiptItems(kitchenItems),
     ...(data.note ? { note: data.note } : {}),
     createdAt: data.createdAt,
   };

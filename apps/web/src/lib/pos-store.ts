@@ -20,6 +20,18 @@ export function cartLineKey(item: Pick<CartItem, 'lineId' | 'productId'>): strin
   return item.lineId ?? item.productId;
 }
 
+/** سطر كتالوج عادي (ليس يدوي) — قابل للدمج عند تكرار الضغط على نفس الصنف */
+export function isMergeableCatalogCartLine(
+  item: Pick<CartItem, 'lineId' | 'productId'>,
+  productId: string,
+  customLineProductId?: string | null,
+): boolean {
+  if (item.productId !== productId) return false;
+  if (customLineProductId && item.productId === customLineProductId) return false;
+  // lineId === productId كان خطأ قديماً — ندمج هذه الأسطر أيضاً
+  return !item.lineId || item.lineId === item.productId;
+}
+
 export type OrderType = 'eat-in' | 'takeaway';
 export type CollectionStatus = 'pending_approval' | 'uncollected' | 'approved';
 

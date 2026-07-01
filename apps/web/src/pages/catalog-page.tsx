@@ -25,7 +25,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { SectionCard, MetricCard } from './shared.js';
 import { cardSx, ui } from '../lib/ui-tokens.js';
 import { useAuth } from '../lib/auth-context.js';
-import { invalidatePosQueries, useBranches } from '../lib/hooks.js';
+import { invalidatePosCatalog, useBranches } from '../lib/hooks.js';
 
 import { API_BASE } from '../lib/api-client.js';
 
@@ -210,7 +210,7 @@ export function CatalogPage() {
       setRecipeAction('none');
       setSelectedRecipeId('');
       fetchProducts();
-      invalidatePosQueries(queryClient);
+      invalidatePosCatalog(queryClient);
     } catch { setMsg('❌ فشل الاتصال'); }
     setLoading(false);
     setSnack(true);
@@ -225,7 +225,7 @@ export function CatalogPage() {
       });
       if (res.ok) {
         fetchProducts();
-        invalidatePosQueries(queryClient);
+        invalidatePosCatalog(queryClient);
       }
     } catch {}
   };

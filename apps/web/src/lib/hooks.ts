@@ -22,13 +22,21 @@ export type ShiftOrdersPage = { orders: any[]; nextCursor: string | null };
 
 export function invalidatePosQueries(queryClient: ReturnType<typeof useQueryClient>) {
   clearPosCatalogCache();
-  queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.context });
-  queryClient.invalidateQueries({ queryKey: ['pos-shift-summary'] });
-  queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected'] });
-  queryClient.invalidateQueries({ queryKey: ['orders-shift-collected'] });
-  queryClient.invalidateQueries({ queryKey: ['orders-suspended'] });
-  queryClient.invalidateQueries({ queryKey: ['shift-current'] });
-  queryClient.invalidateQueries({ queryKey: ['pos-catalog'] });
+  return Promise.all([
+    queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.context }),
+    queryClient.invalidateQueries({ queryKey: ['pos-shift-summary'] }),
+    queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected'] }),
+    queryClient.invalidateQueries({ queryKey: ['orders-shift-collected'] }),
+    queryClient.invalidateQueries({ queryKey: ['orders-suspended'] }),
+    queryClient.invalidateQueries({ queryKey: ['shift-current'] }),
+    queryClient.invalidateQueries({ queryKey: ['pos-catalog'] }),
+  ]);
+}
+
+/** تحديث الكتالوج فقط — بعد إضافة/تعديل منتج */
+export function invalidatePosCatalog(queryClient: ReturnType<typeof useQueryClient>) {
+  clearPosCatalogCache();
+  void queryClient.invalidateQueries({ queryKey: ['pos-catalog'] });
 }
 
 /** تحديث الكاش بعد فتح وردية — بدون إعادة جلب pos-context الثقيل */
@@ -297,7 +305,7 @@ export function usePosCatalog(branchId?: string) {
     },
     enabled: !!accessToken && !!branchId,
     staleTime: 60_000,
-    refetchOnMount: 'always',
+    refetchOnWindowFocus: false,
     ...(cached ? { placeholderData: cached } : {}),
   });
 }
@@ -373,6 +381,7 @@ export function useShiftClosedOrders(shiftId?: string) {
 
 export function usePosShiftSummary(shiftId?: string, initialSummary?: unknown) {
   const { accessToken } = useAuth();
+  const hasContextSummary = initialSummary != null;
   return useQuery({
     queryKey: ['pos-shift-summary', shiftId],
     queryFn: async () => {
@@ -380,8 +389,8 @@ export function usePosShiftSummary(shiftId?: string, initialSummary?: unknown) {
       if (!res.ok) throw new Error(res.body ?? res.error);
       return res.data;
     },
-    enabled: !!accessToken && !!shiftId,
-    ...(initialSummary != null ? { initialData: initialSummary } : {}),
+    enabled: !!accessToken && !!shiftId && !hasContextSummary,
+    ...(hasContextSummary ? { placeholderData: initialSummary } : {}),
     staleTime: 60000,
     refetchOnWindowFocus: false,
   });
@@ -694,7 +703,7 @@ export function useShiftMutations() {
       if (!res.ok) throw new Error(parseApiErrorBody(res.body, res.error ?? 'فشل فتح الوردية'));
       return res.data;
     },
-    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
+    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'orders-suspended', 'pos-shift-summary']),
   });
   const closeShift = useMutation({
     mutationFn: async (dto: {
@@ -710,7 +719,7 @@ export function useShiftMutations() {
       if (!res.ok) throw new Error(parseApiErrorBody(res.body, res.error ?? 'فشل إغلاق الوردية'));
       return res.data;
     },
-    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'treasury-workspace', 'treasury-transactions', 'dashboard', 'pos-shift-summary']),
+    onSuccess: () => invalidate(['shift-current', 'pos-context', 'orders-shift-uncollected', 'orders-shift-collected', 'orders-suspended', 'treasury-workspace', 'pos-shift-summary']),
   });
   return { openShift, closeShift };
 }

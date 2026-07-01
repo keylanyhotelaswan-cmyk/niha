@@ -156,7 +156,7 @@ export function PosPage() {
           fromShiftNumber: res.data.fromShiftNumber,
           uncollectedCount: res.data.uncollectedCount,
         });
-        setOpeningFloat(String(res.data.cashAmount));
+        setOpeningFloat('0');
       } else {
         setPendingCashHandoff(null);
       }
@@ -165,7 +165,9 @@ export function PosPage() {
 
   const cartQtyMap = useMemo(() => {
     const m = new Map<string, number>();
-    order.cartItems.forEach((i) => m.set(i.productId, i.quantity));
+    order.cartItems.forEach((i) => {
+      m.set(i.productId, (m.get(i.productId) ?? 0) + i.quantity);
+    });
     return m;
   }, [order.cartItems]);
 
@@ -837,7 +839,20 @@ export function PosPage() {
                   : ''}
               </Alert>
             ) : null}
-            <TextField label="عهدة الفتح (نقدي)" type="number" value={openingFloat} onChange={(e) => setOpeningFloat(e.target.value)} />
+            <TextField
+              label={pendingCashHandoff ? 'عهدة إضافية (اختياري)' : 'عهدة الفتح (نقدي)'}
+              type="number"
+              value={openingFloat}
+              onChange={(e) => setOpeningFloat(e.target.value)}
+              helperText={pendingCashHandoff
+                ? (() => {
+                    const handoff = Number(pendingCashHandoff.cashAmount);
+                    const extra = Number(openingFloat) || 0;
+                    const total = extra >= handoff ? extra : handoff + extra;
+                    return `إجمالي الاستلام: ${total.toLocaleString('en-US')} ج.م`;
+                  })()
+                : undefined}
+            />
           </Stack>
         </DialogContent>
         <DialogActions>

@@ -241,6 +241,13 @@ export class ShiftsService {
         throw new BadRequestException('يوجد وردية مفتوحة على هذه الخزنة بالفعل');
       }
 
+      const pendingHandoff = await tx.shiftCashHandoff.findFirst({
+        where: { cashBoxId: openDto.cashBoxId, status: 'PENDING' },
+        orderBy: { createdAt: 'desc' },
+      });
+      const handoffAmount = pendingHandoff ? Number(pendingHandoff.cashAmount) : 0;
+      const effectiveOpening = this.resolveShiftOpeningFloat(openingFloat, handoffAmount);
+
       const shiftNumber = await this.sequenceService.getNextNumber(branch.organizationId, 'SHIFT', openDto.branchId);
 
       const shift = await tx.shift.create({
@@ -250,7 +257,7 @@ export class ShiftsService {
           openedById: userId,
           shiftNumber,
           openedAt,
-          openingFloat,
+          openingFloat: effectiveOpening,
         },
         include: { cashBox: true, openedBy: true },
       });
@@ -259,22 +266,29 @@ export class ShiftsService {
         data: {
           shiftId: shift.id,
           createdById: userId,
-          amount: openingFloat,
+          amount: effectiveOpening,
+          ...(handoffAmount > 0
+            ? { note: `استلام ${handoffAmount} ج.م من وردية ${pendingHandoff!.fromShiftNumber}${effectiveOpening > handoffAmount ? ` + عهدة إضافية ${effectiveOpening - handoffAmount}` : ''}` }
+            : {}),
         },
       });
 
-      if (openingFloat > 0) {
+      if (effectiveOpening > 0) {
         await this.recordShiftOpenFloatTx(tx, {
           branchId: openDto.branchId,
           cashBoxId: openDto.cashBoxId,
           shiftId: shift.id,
-          amount: openingFloat,
-          note: 'رصيد افتتاح الوردية',
+          amount: effectiveOpening,
+          note: handoffAmount > 0
+            ? `رصيد افتتاح (تسليم ${handoffAmount} ج.م من وردية سابقة)`
+            : 'رصيد افتتاح الوردية',
           occurredAt: openedAt,
         });
       }
 
-      const acceptedHandoff = await this.acceptPendingCashHandoff(openDto.cashBoxId, shift.id, tx);
+      const acceptedHandoff = pendingHandoff
+        ? await this.finalizeAcceptedHandoff(pendingHandoff, shift.id, tx)
+        : null;
       return { shift, acceptedHandoff };
     });
 
@@ -353,16 +367,20 @@ export class ShiftsService {
     return user?.fullName?.trim() || user?.username?.trim() || null;
   }
 
-  private async acceptPendingCashHandoff(
-    cashBoxId: string,
+  private resolveShiftOpeningFloat(userFloat: number, handoffAmount: number): number {
+    const user = Math.max(0, userFloat);
+    const handoff = Math.max(0, handoffAmount);
+    if (handoff <= 0) return user;
+    // الواجهة القديمة: الحقل = إجمالي التسليم. الجديدة: الحقل = عهدة إضافية فقط.
+    if (user >= handoff) return user;
+    return handoff + user;
+  }
+
+  private async finalizeAcceptedHandoff(
+    pending: { id: string; fromShiftNumber: string; handedByName: string | null; cashAmount: unknown; uncollectedCount: number; note: string | null },
     acceptedShiftId: string,
-    tx: Prisma.TransactionClient = this.prisma,
+    tx: Prisma.TransactionClient,
   ) {
-    const pending = await tx.shiftCashHandoff.findFirst({
-      where: { cashBoxId, status: 'PENDING' },
-      orderBy: { createdAt: 'desc' },
-    });
-    if (!pending) return null;
     await tx.shiftCashHandoff.update({
       where: { id: pending.id },
       data: { status: 'ACCEPTED', acceptedShiftId, acceptedAt: new Date() },
@@ -375,6 +393,19 @@ export class ShiftsService {
       uncollectedCount: pending.uncollectedCount,
       note: pending.note,
     };
+  }
+
+  private async acceptPendingCashHandoff(
+    cashBoxId: string,
+    acceptedShiftId: string,
+    tx: Prisma.TransactionClient = this.prisma,
+  ) {
+    const pending = await tx.shiftCashHandoff.findFirst({
+      where: { cashBoxId, status: 'PENDING' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!pending) return null;
+    return this.finalizeAcceptedHandoff(pending, acceptedShiftId, tx);
   }
 
   async closeShift(closeDto: CloseShiftDto, userId: string) {
@@ -404,9 +435,13 @@ export class ShiftsService {
     }
 
     const handoffMode = closeDto.handoffMode ?? 'defer';
-    const pending = await this.countTransferableOrders(closeDto.shiftId);
     const handoffNote = closeDto.note?.trim() ?? null;
-    const handedByName = await this.resolveUserDisplayName(userId);
+
+    const [pending, summary, handedByName] = await Promise.all([
+      this.countTransferableOrders(closeDto.shiftId),
+      this.treasuryService.getShiftCloseCashSummary(closeDto.shiftId),
+      this.resolveUserDisplayName(userId),
+    ]);
 
     let targetShiftId: string | null = null;
     let targetCashBoxId: string | null = null;
@@ -443,7 +478,6 @@ export class ShiftsService {
     }
 
     const closedAt = new Date();
-    const summary = await this.treasuryService.getShiftSummary(closeDto.shiftId);
     const transferPlan = handoffMode === 'existing' && pending.total > 0 && targetShiftId
       ? await this.planOrderHandoff({
           sourceShiftId: closeDto.shiftId,
@@ -818,38 +852,24 @@ export class ShiftsService {
   async getPosShiftSummary(shiftId: string, opts?: { includeOrders?: boolean }) {
     const includeOrders = opts?.includeOrders !== false;
 
-    const [shift, treasurySummary, expenses, walletTransferTxs] = await Promise.all([
-      this.prisma.shift.findUnique({
-        where: { id: shiftId },
-        include: { openedBy: true, cashBox: true },
-      }),
+    const [treasurySummary, expenses] = await Promise.all([
       this.treasuryService.getShiftSummary(shiftId),
       this.prisma.cashierExpense.findMany({
         where: { shiftId },
         orderBy: { createdAt: 'desc' },
       }),
-      this.prisma.treasuryTransaction.findMany({
-        where: {
-          shiftId,
-          sourceType: { in: ['SHIFT_WALLET_TRANSFER_OUT', 'SHIFT_WALLET_TRANSFER_IN'] },
-        },
-        select: { amount: true, paymentMethod: true, sourceType: true },
-      }),
     ]);
+    const shift = treasurySummary.shift;
     if (!shift) {
       throw new NotFoundException('Shift not found');
     }
 
-    const expensesTotal = expenses.reduce((s, e) => s + Number(e.amount), 0);
+    const expensesTotal = treasurySummary.expensesTotal;
     const expensesGeneral = expenses.filter((e) => e.kind === 'GENERAL').reduce((s, e) => s + Number(e.amount), 0);
     const expensesItems = expenses.filter((e) => e.kind === 'ITEM').reduce((s, e) => s + Number(e.amount), 0);
-    const expensesByPaymentMethod = aggregateExpensesByPaymentMethod(expenses);
-    const walletTransfers = aggregateShiftWalletTransfers(walletTransferTxs);
-    const netSalesByMethod = netCollectionByMethod(
-      treasurySummary.salesByMethod,
-      expensesByPaymentMethod,
-      walletTransfers,
-    );
+    const expensesByPaymentMethod = treasurySummary.expensesByPaymentMethod;
+    const walletTransfers = treasurySummary.walletTransfers;
+    const netSalesByMethod = treasurySummary.netSalesByMethod;
 
     let collectedApproved = 0;
     let collectedPending = 0;
@@ -882,40 +902,17 @@ export class ShiftsService {
     };
 
     if (!includeOrders) {
-      const uncollectedWhere = uncollectedOrderWhere({ shiftId, status: 'CLOSED' });
-      const [ordersCount, salesAgg, uncollectedAgg, uncollectedOrdersRaw, suspendedCount] = await Promise.all([
-        this.prisma.order.count({ where: { shiftId, status: 'CLOSED' } }),
-        this.prisma.order.aggregate({
-          where: { shiftId, status: 'CLOSED' },
-          _sum: { totalAmount: true },
-        }),
-        this.prisma.order.aggregate({
-          where: uncollectedWhere,
-          _sum: { totalAmount: true },
-          _count: true,
-        }),
-        this.prisma.order.findMany({
-          where: uncollectedWhere,
-          select: { orderNumber: true, totalAmount: true, customerName: true },
-          orderBy: { closedAt: 'desc' },
-          take: 25,
-        }),
-        this.prisma.order.count({ where: { shiftId, status: 'SUSPENDED' } }),
-      ]);
+      const suspendedCount = await this.prisma.order.count({ where: { shiftId, status: 'SUSPENDED' } });
 
       return {
         ...base,
-        ordersCount,
-        salesTotal: Number(salesAgg._sum.totalAmount ?? 0),
+        ordersCount: treasurySummary.ordersCount,
+        salesTotal: treasurySummary.totalSales,
         suspendedCount,
         shiftClosedOrders: [],
-        uncollectedCount: uncollectedAgg._count,
-        uncollectedTotal: Number(uncollectedAgg._sum.totalAmount ?? 0),
-        uncollectedOrders: uncollectedOrdersRaw.map((o) => ({
-          orderNumber: o.orderNumber,
-          total: Number(o.totalAmount),
-          customerName: o.customerName,
-        })),
+        uncollectedCount: treasurySummary.uncollectedCount,
+        uncollectedTotal: treasurySummary.uncollectedTotal,
+        uncollectedOrders: treasurySummary.uncollectedOrders,
       };
     }
 

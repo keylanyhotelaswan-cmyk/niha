@@ -61,6 +61,7 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
   const transactions = workspace?.shiftTransactions ?? [];
 
   const [openingFloat, setOpeningFloat] = useState('0');
+  const [openingInFlight, setOpeningInFlight] = useState(false);
   const [movementType, setMovementType] = useState('CASH_DEPOSIT');
   const [movementSafeType, setMovementSafeType] = useState<'PROFITS' | 'EXPENSES'>('EXPENSES');
   const [movementPaymentMethod, setMovementPaymentMethod] = useState<(typeof paymentMethodOptions)[number]>('CASH');
@@ -105,7 +106,7 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
           fromShiftNumber: res.data.fromShiftNumber,
           uncollectedCount: res.data.uncollectedCount,
         });
-        setOpeningFloat(String(res.data.cashAmount));
+        setOpeningFloat('0');
       } else {
         setPendingCashHandoff(null);
       }
@@ -141,30 +142,37 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
       setCloseOpen(true);
       return;
     }
-    const res = await apiOpenShift({
-      branchId,
-      cashBoxId,
-      openingFloat: Number(openingFloat) || 0,
-    }, accessToken);
-    if (res.ok) {
-      const data = res.data as {
-        acceptedHandoff?: {
-          handedByName?: string | null;
-          cashAmount?: number;
-          fromShiftNumber?: string;
-          uncollectedCount?: number;
+    if (openingInFlight) return;
+    setOpeningInFlight(true);
+    try {
+      const res = await apiOpenShift({
+        branchId,
+        cashBoxId,
+        openingFloat: Number(openingFloat) || 0,
+      }, accessToken);
+      if (res.ok) {
+        const data = res.data as {
+          acceptedHandoff?: {
+            handedByName?: string | null;
+            cashAmount?: number;
+            fromShiftNumber?: string;
+            uncollectedCount?: number;
+          };
         };
-      };
-      const handoff = data?.acceptedHandoff;
-      if (handoff?.handedByName && handoff.cashAmount != null) {
-        onMessage(`${handoff.handedByName} سلّمك ${Number(handoff.cashAmount).toLocaleString('en-US')} ج.م نقدية (من وردية ${handoff.fromShiftNumber ?? '—'})`);
+        const handoff = data?.acceptedHandoff;
+        if (handoff?.handedByName && handoff.cashAmount != null) {
+          onMessage(`${handoff.handedByName} سلّمك ${Number(handoff.cashAmount).toLocaleString('en-US')} ج.م نقدية (من وردية ${handoff.fromShiftNumber ?? '—'})`);
+        } else {
+          onMessage('تم فتح الوردية.');
+        }
+        setPendingCashHandoff(null);
+        setOpeningFloat('0');
+        onRefresh();
       } else {
-        onMessage('تم فتح الوردية.');
+        onMessage(`فشل فتح الوردية: ${res.body ?? res.error}`);
       }
-      setPendingCashHandoff(null);
-      onRefresh();
-    } else {
-      onMessage(`فشل فتح الوردية: ${res.body ?? res.error}`);
+    } finally {
+      setOpeningInFlight(false);
     }
   };
 
@@ -287,16 +295,22 @@ export function CurrentShiftTab({ workspace, branchId, cashBoxId, onRefresh, onM
                       </Alert>
                     ) : null}
                     <TextField
-                      label="رصيد الافتتاح"
+                      label={pendingCashHandoff ? 'عهدة إضافية (اختياري)' : 'رصيد الافتتاح'}
                       size="small"
                       type="number"
                       value={openingFloat}
                       onChange={(e) => setOpeningFloat(e.target.value)}
+                      helperText={pendingCashHandoff ? (() => {
+                        const handoff = Number(pendingCashHandoff.cashAmount);
+                        const extra = Number(openingFloat) || 0;
+                        const total = extra >= handoff ? extra : handoff + extra;
+                        return `إجمالي الاستلام: ${total.toLocaleString('en-US')} ج.م`;
+                      })() : undefined}
                     />
                   </>
                 ) : null}
-                <Button variant={shiftOpen ? 'outlined' : 'contained'} onClick={toggleShift}>
-                  {shiftOpen ? 'إغلاق الوردية' : 'فتح وردية'}
+                <Button variant={shiftOpen ? 'outlined' : 'contained'} disabled={openingInFlight} onClick={() => void toggleShift()}>
+                  {openingInFlight ? 'جاري الفتح…' : shiftOpen ? 'إغلاق الوردية' : 'فتح وردية'}
                 </Button>
               </Stack>
             </SectionCard>

@@ -1,6 +1,11 @@
 import { parseItemNote } from './pos-order-sauces.js';
 import { formatOrderTimestamp } from './date-utils.js';
 import { isValidCustomerPhone } from './customer-phone.js';
+/** صنف placeholder في الكتالوج لأسطر يدوية (اسم + سعر مخصّص) */
+export const POS_CUSTOM_LINE_SKU = 'POS-CUSTOM';
+export function cartLineKey(item) {
+    return item.lineId ?? item.productId;
+}
 export function isShiftOrderUncollected(order) {
     return order.collectionStatus === 'uncollected' || order.paymentStatus === 'PENDING';
 }
@@ -129,15 +134,30 @@ export function mapApiOrderToSavedOrder(order, status) {
             : {}),
         discountAmount: String(order.discountAmount ?? 0),
         orderNote: order.note ?? '',
-        items: (order.items ?? []).map((item) => {
+        items: (order.items ?? []).map((item, index) => {
             const rawNote = resolveOrderItemNote(item);
             const parsed = parseItemNote(rawNote);
+            const isCustomLine = item.product?.sku === POS_CUSTOM_LINE_SKU;
+            let name = item.product?.name ?? 'صنف';
+            let userNote = parsed.userNote;
+            if (isCustomLine && rawNote.trim()) {
+                const splitIdx = rawNote.indexOf(' · ');
+                if (splitIdx >= 0) {
+                    name = rawNote.slice(0, splitIdx).trim() || name;
+                    userNote = parseItemNote(rawNote.slice(splitIdx + 3)).userNote;
+                }
+                else if (!parsed.sauces.length) {
+                    name = rawNote.trim();
+                    userNote = '';
+                }
+            }
             return {
+                lineId: item.id ?? `${item.productId}-${index}`,
                 productId: item.productId,
-                name: item.product?.name ?? 'صنف',
+                name,
                 unitPrice: Number(item.unitPrice),
                 quantity: Number(item.quantity),
-                note: parsed.userNote,
+                note: userNote,
                 sauces: parsed.sauces,
             };
         }),

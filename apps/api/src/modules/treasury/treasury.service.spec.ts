@@ -12,6 +12,12 @@ describe('TreasuryService safe split', () => {
       create: jest.fn(),
       findMany: jest.fn(),
     },
+    shift: {
+      findUnique: jest.fn(),
+    },
+    order: {
+      aggregate: jest.fn(),
+    },
     $transaction: jest.fn(),
   };
 
@@ -73,6 +79,28 @@ describe('TreasuryService safe split', () => {
     expect(prismaMock.treasuryTransaction.create).toHaveBeenNthCalledWith(2, expect.objectContaining({
       data: expect.objectContaining({ safeType: 'PROFITS', amount: 4000 }),
     }));
+  });
+
+  it('does not double-count SHIFT_OPEN_FLOAT in expected cash', async () => {
+    prismaMock.shift = {
+      findUnique: jest.fn().mockResolvedValue({ openingFloat: 1000 }),
+    };
+    prismaMock.order = {
+      aggregate: jest.fn().mockResolvedValue({ _count: 0, _sum: { totalAmount: 0 } }),
+    };
+    prismaMock.treasuryTransaction.findMany.mockResolvedValue([
+      {
+        amount: 1000,
+        transactionType: 'SHIFT_OPEN_FLOAT',
+        paymentMethod: 'CASH',
+        approvalStatus: 'APPROVED',
+        affectsCash: true,
+      },
+    ]);
+
+    const summary = await service.getShiftCloseCashSummary('shift-1');
+    expect(summary.expectedCash).toBe(1000);
+    expect(summary.openingFloat).toBe(1000);
   });
 
   it('prevents expense payments from profits safe', async () => {

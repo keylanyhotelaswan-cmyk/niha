@@ -223,14 +223,7 @@ export function usePosWorkspace() {
   };
 
   const refreshAll = async () => {
-    invalidatePosQueries(queryClient);
-    await Promise.all([
-      refetchPosContext(),
-      refetchShift(),
-      refetchPosSummary(),
-      refetchShiftOrders(),
-      refetchSuspended(),
-    ]);
+    await invalidatePosQueries(queryClient);
   };
 
   const resolveContextIds = async (): Promise<{ branchId: string; cashBoxId: string } | null> => {
@@ -313,7 +306,6 @@ export function usePosWorkspace() {
         ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
         ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
       });
-      invalidatePosQueries(queryClient);
       await refreshAll();
       const handoff = (result as { handoff?: { mode?: string; transferredCount?: number; targetShiftNumber?: string; cashAmount?: number; handedByName?: string } })?.handoff;
       const successor = (result as { successorShift?: { shiftNumber?: string } })?.successorShift;
@@ -332,7 +324,6 @@ export function usePosWorkspace() {
     } catch (e) {
       const message = (e as Error).message ?? 'فشل إغلاق الوردية';
       if (message.includes('مغلقة بالفعل')) {
-        invalidatePosQueries(queryClient);
         await refreshAll();
         return { ok: true, message: 'الوردية مغلقة.' };
       }

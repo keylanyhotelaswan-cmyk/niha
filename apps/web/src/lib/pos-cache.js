@@ -37,3 +37,11 @@ export function writePosCatalogCache(branchId, data) {
         /* ignore */
     }
 }
+export function clearPosCatalogCache() {
+    try {
+        sessionStorage.removeItem(POS_CATALOG_KEY);
+    }
+    catch {
+        /* ignore */
+    }
+}

@@ -3,7 +3,7 @@ import { apiCloseShift, apiGetCustomer, apiListCustomers, apiListOrdersByShift }
 import { apiGet, apiPost, parseApiErrorBody } from './api-client.js';
 import { useAuth } from './auth-context.js';
 import { isApiOrderUncollected } from './pos-store.js';
-import { readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
+import { clearPosCatalogCache, readPosCatalogCache, readPosContextCache, writePosCatalogCache, writePosContextCache } from './pos-cache.js';
 function token(accessToken) {
     return accessToken ?? undefined;
 }
@@ -16,6 +16,7 @@ export const POS_QUERY_KEYS = {
     shiftCurrent: (branchId, cashBoxId) => ['shift-current', branchId, cashBoxId],
 };
 export function invalidatePosQueries(queryClient) {
+    clearPosCatalogCache();
     queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.context });
     queryClient.invalidateQueries({ queryKey: ['pos-shift-summary'] });
     queryClient.invalidateQueries({ queryKey: ['orders-shift-uncollected'] });
@@ -221,7 +222,8 @@ export function usePosCatalog(branchId) {
             return data;
         },
         enabled: !!accessToken && !!branchId,
-        staleTime: 300000,
+        staleTime: 60_000,
+        refetchOnMount: 'always',
         ...(cached ? { placeholderData: cached } : {}),
     });
 }

@@ -242,6 +242,11 @@ export class TreasuryService {
         continue;
       }
 
+      // عهدة الافتتاح مُضمّنة في openingFloat — حركة SHIFT_OPEN_FLOAT للسجل فقط
+      if (tx.transactionType === 'SHIFT_OPEN_FLOAT') {
+        continue;
+      }
+
       if (!tx.affectsCash) {
         if (tx.approvalStatus === 'PENDING') pending += amount;
         continue;
@@ -1244,7 +1249,8 @@ export class TreasuryService {
       throw new NotFoundException('Shift not found');
     }
 
-    const txSelect = {
+    const txFullSelect = {
+      id: true,
       amount: true,
       transactionType: true,
       paymentMethod: true,
@@ -1252,43 +1258,23 @@ export class TreasuryService {
       approvalStatus: true,
       affectsCash: true,
       sourceType: true,
+      sourceId: true,
+      note: true,
+      occurredAt: true,
+      paymentMethodRef: { select: { name: true } },
     } as const;
 
     const uncollectedWhere = uncollectedOrderWhere({ shiftId, status: 'CLOSED' });
 
-    const [allTxRows, recentTransactionsRaw, expenseRows, walletTransferTxs, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
+    const [allTxFull, expenseRows, closedOrdersAgg, uncollectedAgg, uncollectedOrdersRaw] = await Promise.all([
       this.prisma.treasuryTransaction.findMany({
         where: { shiftId },
-        select: txSelect,
-      }),
-      this.prisma.treasuryTransaction.findMany({
-        where: { shiftId },
-        select: {
-          id: true,
-          amount: true,
-          transactionType: true,
-          paymentMethod: true,
-          safeType: true,
-          note: true,
-          occurredAt: true,
-          approvalStatus: true,
-          sourceType: true,
-          sourceId: true,
-          paymentMethodRef: { select: { name: true } },
-        },
+        select: txFullSelect,
         orderBy: { occurredAt: 'desc' },
-        take: 200,
       }),
       this.prisma.cashierExpense.findMany({
         where: { shiftId },
         select: { amount: true, paymentMethod: true },
-      }),
-      this.prisma.treasuryTransaction.findMany({
-        where: {
-          shiftId,
-          sourceType: { in: ['SHIFT_WALLET_TRANSFER_OUT', 'SHIFT_WALLET_TRANSFER_IN'] },
-        },
-        select: { amount: true, paymentMethod: true, sourceType: true },
       }),
       this.prisma.order.aggregate({
         where: { shiftId, status: 'CLOSED' },
@@ -1307,6 +1293,20 @@ export class TreasuryService {
         take: 25,
       }),
     ]);
+
+    const allTxRows = allTxFull.map(({ amount, transactionType, paymentMethod, safeType, approvalStatus, affectsCash, sourceType }) => ({
+      amount,
+      transactionType,
+      paymentMethod,
+      safeType,
+      approvalStatus,
+      affectsCash,
+      sourceType,
+    }));
+    const walletTransferTxs = allTxFull
+      .filter((tx) => tx.sourceType === 'SHIFT_WALLET_TRANSFER_OUT' || tx.sourceType === 'SHIFT_WALLET_TRANSFER_IN')
+      .map(({ amount, paymentMethod, sourceType }) => ({ amount, paymentMethod, sourceType }));
+    const recentTransactionsRaw = allTxFull.slice(0, 200);
 
     const orderIds = [
       ...new Set(
@@ -1357,5 +1357,38 @@ export class TreasuryService {
 
   async getShiftSummary(shiftId: string) {
     return this.getShiftSummaryLight(shiftId);
+  }
+
+  /** ملخص خفيف لإغلاق الوردية — بدون قوائم الطلبات غير المحصّلة */
+  async getShiftCloseCashSummary(shiftId: string) {
+    const shift = await this.prisma.shift.findUnique({
+      where: { id: shiftId },
+      select: { openingFloat: true },
+    });
+    if (!shift) {
+      throw new NotFoundException('Shift not found');
+    }
+    const txSelect = {
+      amount: true,
+      transactionType: true,
+      paymentMethod: true,
+      approvalStatus: true,
+      affectsCash: true,
+    } as const;
+    const allTxRows = await this.prisma.treasuryTransaction.findMany({
+      where: { shiftId },
+      select: txSelect,
+    });
+    const closedOrdersAgg = await this.prisma.order.aggregate({
+      where: { shiftId, status: 'CLOSED' },
+      _count: true,
+      _sum: { totalAmount: true },
+    });
+    const totals = this.computeShiftTotals(Number(shift.openingFloat), allTxRows);
+    return {
+      ...totals,
+      ordersCount: closedOrdersAgg._count,
+      totalSales: Number(closedOrdersAgg._sum.totalAmount ?? 0),
+    };
   }
 }

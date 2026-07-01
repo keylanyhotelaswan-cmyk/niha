@@ -20,6 +20,7 @@ import {
   mapPaymentMethodCode,
   validateTakeawayOrderFields,
   cartLineKey,
+  isMergeableCatalogCartLine,
   type CartItem,
   type CollectionStatus,
   type OrderType,
@@ -146,7 +147,6 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
     resetOrder('eat-in');
     setProductSearch('');
     catalog.setActiveCategory(ALL_CATEGORIES);
-    catalog.reload?.();
     setModalOpen(true);
     return true;
   };
@@ -204,18 +204,27 @@ export function usePosOrderSession(workspace: Workspace, catalog: {
 
   const addProduct = (product: { id: string; name: string; salePrice: number; isAvailable?: boolean; dailyPlan?: DailyPlan }) => {
     if (!product.isAvailable) return;
+    const customLineProductId = catalog.customLineProductId;
     setCartItems((cur) => {
-      const prevQty = cur.find((i) => i.productId === product.id && !i.lineId)?.quantity ?? 0;
+      const matches = cur.filter((i) => isMergeableCatalogCartLine(i, product.id, customLineProductId));
+      const prevQty = matches.reduce((sum, i) => sum + i.quantity, 0);
       const nextQty = prevQty + 1;
       notifyPlanChange(product, prevQty, nextQty);
-      const ex = cur.find((i) => i.productId === product.id && !i.lineId);
-      if (ex) {
-        return cur.map((i) => (
-          i.productId === product.id && !i.lineId ? { ...i, quantity: i.quantity + 1 } : i
-        ));
+
+      if (matches.length > 0) {
+        const template = matches[0]!;
+        const withoutDupes = cur.filter((i) => !isMergeableCatalogCartLine(i, product.id, customLineProductId));
+        return [...withoutDupes, {
+          productId: product.id,
+          name: template.name || product.name,
+          unitPrice: template.unitPrice ?? product.salePrice,
+          quantity: nextQty,
+          note: template.note ?? '',
+          sauces: template.sauces ?? [],
+        }];
       }
+
       return [...cur, {
-        lineId: product.id,
         productId: product.id,
         name: product.name,
         unitPrice: product.salePrice,
