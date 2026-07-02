@@ -138,18 +138,28 @@ export function seedPosSessionCaches(
 
   if (shiftId && session.ordersUncollected) {
     const page = session.ordersUncollected as ShiftOrdersPage;
-    queryClient.setQueryData(POS_QUERY_KEYS.shiftUncollected(shiftId), {
-      pages: [page],
-      pageParams: [undefined],
-    });
+    const key = POS_QUERY_KEYS.shiftUncollected(shiftId);
+    const existing = queryClient.getQueryData<{ pages: ShiftOrdersPage[] }>(key);
+    const existingCount = existing?.pages?.flatMap((p) => p.orders ?? []).length ?? 0;
+    if ((page.orders?.length ?? 0) > 0 || existingCount === 0) {
+      queryClient.setQueryData(key, {
+        pages: [page],
+        pageParams: [undefined],
+      });
+    }
   }
 
   if (shiftId && session.ordersCollected) {
     const page = session.ordersCollected as ShiftOrdersPage;
-    queryClient.setQueryData(POS_QUERY_KEYS.shiftCollected(shiftId), {
-      pages: [page],
-      pageParams: [undefined],
-    });
+    const key = POS_QUERY_KEYS.shiftCollected(shiftId);
+    const existing = queryClient.getQueryData<{ pages: ShiftOrdersPage[] }>(key);
+    const existingCount = existing?.pages?.flatMap((p) => p.orders ?? []).length ?? 0;
+    if ((page.orders?.length ?? 0) > 0 || existingCount === 0) {
+      queryClient.setQueryData(key, {
+        pages: [page],
+        pageParams: [undefined],
+      });
+    }
   }
 }
 
@@ -377,10 +387,10 @@ export function usePosSession() {
       return data;
     },
     enabled: !!accessToken,
-    staleTime: 60_000,
+    staleTime: 120_000,
     retry: false,
     refetchOnWindowFocus: false,
-    refetchOnMount: 'always',
+    refetchOnMount: true,
     ...(cachedSession?.branch
       ? {
           initialData: cachedSession,

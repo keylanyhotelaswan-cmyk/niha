@@ -46,7 +46,7 @@ export type SavedOrder = {
   customerAddress?: string;
   captainName?: string;
   paymentMethod: string;
-  paymentStatus?: 'PENDING' | 'PAID' | 'VOIDED';
+  paymentStatus?: 'PENDING' | 'PAID' | 'VOIDED' | 'PARTIAL';
   discountAmount: string;
   orderNote: string;
   items: CartItem[];
@@ -60,7 +60,11 @@ export type SavedOrder = {
 };
 
 export function isShiftOrderUncollected(order: SavedOrder) {
-  return order.collectionStatus === 'uncollected' || order.paymentStatus === 'PENDING';
+  return (
+    order.collectionStatus === 'uncollected'
+    || order.paymentStatus === 'PENDING'
+    || order.paymentStatus === 'PARTIAL'
+  );
 }
 
 /** نفس تعريف الـ API — للطلبات الخام قبل التحويل */
@@ -171,6 +175,45 @@ export function mapApiOrderType(orderType: string): OrderType {
 
 function resolveCreatorName(createdBy?: { fullName?: string | null; username?: string | null } | null) {
   return createdBy?.fullName?.trim() || createdBy?.username?.trim() || '';
+}
+
+/** طلب من قائمة shift — نثق بفلتر الـ API ولا نعيد تصنيفه خطأ */
+export function mapShiftListOrder(
+  order: Parameters<typeof mapApiOrderToSavedOrder>[0],
+  listKind: 'uncollected' | 'collected',
+): SavedOrder {
+  const mapped = mapApiOrderToSavedOrder(order, 'closed');
+  if (listKind === 'uncollected' && !isShiftOrderUncollected(mapped) && isApiOrderUncollected(order)) {
+    return {
+      ...mapped,
+      collectionStatus: 'uncollected',
+      paymentStatus: mapped.paymentStatus ?? 'PENDING',
+    };
+  }
+  return mapped;
+}
+
+export function mapSummaryUncollectedStubToSavedOrder(order: {
+  orderNumber: string;
+  total: number;
+  customerName?: string | null;
+}): SavedOrder {
+  return {
+    id: `uncollected-stub:${order.orderNumber}`,
+    code: order.orderNumber,
+    orderType: 'eat-in',
+    total: Number(order.total),
+    itemsCount: 0,
+    ownerName: order.customerName?.trim() ?? '',
+    paymentMethod: 'cash',
+    paymentStatus: 'PENDING',
+    discountAmount: '0',
+    orderNote: '',
+    items: [],
+    createdAt: '',
+    status: 'closed',
+    collectionStatus: 'uncollected',
+  };
 }
 
 export function mapApiOrderToSavedOrder(

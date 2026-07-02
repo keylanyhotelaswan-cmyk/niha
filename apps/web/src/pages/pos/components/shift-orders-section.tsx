@@ -129,6 +129,16 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
         }>
           تعذّر تحميل الطلبات — تأكد أن السيرفر يعمل ثم أعد المحاولة.
         </Alert>
+      ) : visible.length === 0 && (props.tab === 'uncollected'
+        ? (props.totalUncollectedCount ?? 0) > 0
+        : (props.totalCollectedCount ?? 0) > 0) ? (
+        <Alert severity="info" sx={{ borderRadius: 3 }} action={
+          <Button size="small" onClick={props.onRetry}>تحديث</Button>
+        }>
+          {props.loading
+            ? 'جاري تحميل الطلبات…'
+            : 'الملخص يظهر طلبات لكن القائمة لم تُحمَّل بعد — اضغط تحديث.'}
+        </Alert>
       ) : visible.length === 0 ? (
         <Alert severity="info" sx={{ borderRadius: 3 }}>
           {props.tab === 'uncollected' ? 'لا توجد طلبات غير محصلة في هذه الوردية.' : 'لا توجد طلبات محصلة في هذه الوردية.'}

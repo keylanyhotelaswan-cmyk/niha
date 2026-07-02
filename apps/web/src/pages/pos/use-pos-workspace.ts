@@ -28,13 +28,15 @@ import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
 import { getReceiptSettings, mergeReceiptSettings, RECEIPT_SETTINGS_EVENT, saveReceiptSettings } from '../../lib/pos-receipt-settings.js';
 import {
   isShiftOrderCollected,
-  isShiftOrderUncollected,
   mapApiOrderToSavedOrder,
   mapPaymentMethodCode,
+  mapShiftListOrder,
+  mapSummaryUncollectedStubToSavedOrder,
   readPosBranchId,
   writePosBranchId,
   type SavedOrder,
 } from '../../lib/pos-store.js';
+import type { ShiftSummaryLike } from '../../lib/shift-summary-utils.js';
 
 function readCount(value: unknown): number | undefined {
   const n = Number(value);
@@ -140,6 +142,7 @@ export function usePosWorkspace() {
         ordersCount: treasurySummary.ordersCount,
         uncollectedCount: treasurySummary.uncollectedCount,
         uncollectedTotal: treasurySummary.uncollectedTotal,
+        uncollectedOrders: treasurySummary.uncollectedOrders,
         byPaymentMethod: treasurySummary.byPaymentMethod,
         salesByMethod: treasurySummary.salesByMethod,
         expensesByPaymentMethod: treasurySummary.expensesByPaymentMethod,
@@ -158,9 +161,10 @@ export function usePosWorkspace() {
     fetchNextPage: fetchNextUncollectedPage,
     hasNextPage: hasMoreUncollected,
     isFetchingNextPage: uncollectedLoadingMore,
+    isFetching: uncollectedFetching,
   } = useShiftUncollectedOrders(
     ordersShiftId,
-    !sessionReady || !sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersUncollected'),
+    sessionReady && Boolean(ordersShiftId),
   );
 
   const {
@@ -171,9 +175,10 @@ export function usePosWorkspace() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
+    isFetching: collectedFetching,
   } = useShiftCollectedOrders(
     ordersShiftId,
-    !sessionReady || !sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersCollected'),
+    sessionReady && Boolean(ordersShiftId),
   );
 
   const hasShiftOrdersSeed = sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersUncollected')
@@ -244,47 +249,66 @@ export function usePosWorkspace() {
     [apiSuspended],
   );
 
-  const shiftClosedOrdersSource = useMemo(() => {
-    const uncollected = uncollectedPages?.pages.flatMap((p) => p.orders) ?? [];
-    const collected = collectedPages?.pages.flatMap((p) => p.orders) ?? [];
-    if (uncollected.length > 0 || collected.length > 0) {
-      return [...uncollected, ...collected];
+  const mergeOrderPages = (
+    pages: { orders?: unknown[] }[] | undefined,
+    bootstrapOrders: unknown[] | undefined,
+  ): unknown[] => {
+    const fromPages = pages?.flatMap((p) => p.orders ?? []) ?? [];
+    const fromBootstrap = bootstrapOrders ?? [];
+    if (fromPages.length === 0) return fromBootstrap;
+    if (fromBootstrap.length === 0) return fromPages;
+    const pageIds = new Set(fromPages.map((o) => String((o as { id?: string }).id)));
+    const extras = fromBootstrap.filter((o) => !pageIds.has(String((o as { id?: string }).id)));
+    return [...fromPages, ...extras];
+  };
+
+  const bootstrapMatchesShift = sessionShiftIdOf(bootstrapSession) === ordersShiftId;
+  const bootstrapUncollectedRaw = bootstrapMatchesShift
+    ? bootstrapSession?.ordersUncollected?.orders
+    : undefined;
+  const bootstrapCollectedRaw = bootstrapMatchesShift
+    ? bootstrapSession?.ordersCollected?.orders
+    : undefined;
+
+  const uncollectedOrdersSource = useMemo(
+    () => mergeOrderPages(uncollectedPages?.pages, bootstrapUncollectedRaw),
+    [uncollectedPages, bootstrapUncollectedRaw],
+  );
+
+  const collectedOrdersSource = useMemo(
+    () => mergeOrderPages(collectedPages?.pages, bootstrapCollectedRaw),
+    [collectedPages, bootstrapCollectedRaw],
+  );
+
+  const uncollectedOrdersFromLists = useMemo(
+    () => uncollectedOrdersSource.map((o: any) => mapShiftListOrder(o, 'uncollected')),
+    [uncollectedOrdersSource],
+  );
+
+  const collectedOrders = useMemo(
+    () => collectedOrdersSource.map((o: any) => mapShiftListOrder(o, 'collected')),
+    [collectedOrdersSource],
+  );
+
+  const uncollectedOrders = useMemo(() => {
+    if (uncollectedOrdersFromLists.length > 0) return uncollectedOrdersFromLists;
+    const summaryStubs = (displayPosSummary as ShiftSummaryLike | null)?.uncollectedOrders ?? [];
+    if (summaryStubs.length > 0) {
+      return summaryStubs.map(mapSummaryUncollectedStubToSavedOrder);
     }
-    const bootstrapMatchesShift = sessionShiftIdOf(bootstrapSession) === ordersShiftId;
-    const bootstrapUncollected = bootstrapMatchesShift
-      ? bootstrapSession?.ordersUncollected?.orders ?? []
-      : [];
-    const bootstrapCollected = bootstrapMatchesShift
-      ? bootstrapSession?.ordersCollected?.orders ?? []
-      : [];
-    if (bootstrapUncollected.length > 0 || bootstrapCollected.length > 0) {
-      return [...bootstrapUncollected, ...bootstrapCollected];
-    }
-    const fromSummary = posSummary?.shiftClosedOrders ?? bootstrapSession?.posSummary?.shiftClosedOrders;
-    return fromSummary ?? [];
-  }, [uncollectedPages, collectedPages, posSummary, bootstrapSession, ordersShiftId]);
+    return [];
+  }, [uncollectedOrdersFromLists, displayPosSummary]);
 
   const shiftClosedOrders = useMemo<SavedOrder[]>(() => {
     const seen = new Set<string>();
-    return shiftClosedOrdersSource
-      .map((o: any) => mapApiOrderToSavedOrder(o, 'closed'))
-      .filter((o: SavedOrder) => {
-        if (seen.has(o.id)) return false;
-        seen.add(o.id);
-        return true;
-      });
-  }, [shiftClosedOrdersSource]);
+    return [...uncollectedOrders, ...collectedOrders].filter((o) => {
+      if (seen.has(o.id)) return false;
+      seen.add(o.id);
+      return true;
+    });
+  }, [uncollectedOrders, collectedOrders]);
 
   const shiftOrdersShowError = shiftOrdersError && shiftClosedOrders.length === 0;
-
-  const uncollectedOrders = useMemo(
-    () => shiftClosedOrders.filter((o) => isShiftOrderUncollected(o)),
-    [shiftClosedOrders],
-  );
-  const collectedOrders = useMemo(
-    () => shiftClosedOrders.filter((o) => isShiftOrderCollected(o)),
-    [shiftClosedOrders],
-  );
   const uncollectedAmount = useMemo(
     () => uncollectedOrders.reduce((s, o) => s + o.total, 0),
     [uncollectedOrders],
@@ -305,6 +329,26 @@ export function usePosWorkspace() {
   const displaySuspendedCount =
     readCount((displayPosSummary as { suspendedCount?: number } | null)?.suspendedCount)
     ?? suspendedOrders.length;
+
+  useEffect(() => {
+    if (!ordersShiftId || shiftOrdersPending) return;
+    if (summaryUncollectedCount != null
+      && summaryUncollectedCount > uncollectedOrdersFromLists.length
+      && !uncollectedFetching
+      && !uncollectedLoadingMore) {
+      void queryClient.invalidateQueries({ queryKey: POS_QUERY_KEYS.shiftUncollected(ordersShiftId) });
+      void refetchUncollected();
+    }
+  }, [
+    ordersShiftId,
+    shiftOrdersPending,
+    summaryUncollectedCount,
+    uncollectedOrdersFromLists.length,
+    uncollectedFetching,
+    uncollectedLoadingMore,
+    refetchUncollected,
+    queryClient,
+  ]);
 
   const resolvedBranchId = posContext?.branch?.id || branchId || branchList[0]?.id;
   const resolvedCashBoxId = posContext?.cashBox?.id || selectedCashBoxId || cashBoxes[0]?.id;
