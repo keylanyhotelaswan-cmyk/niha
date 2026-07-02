@@ -1,0 +1,1112 @@
+﻿# تدقيق أداء وقت التشغيل — Niha v1
+
+> للقراءة الأسهل: افتح runtime-performance-audit.html في المتصفح (Chrome/Edge)،  
+> أو runtime-performance-audit.txt في Notepad.  
+> ملف .md هذا يستخدم جداول Markdown قد لا تظهر في بعض البرامج.
+
+## تقرير هندسي قائم على الأدلة (Evidence-Based Engineering Audit)
+
+التاريخ: 2026-07-02  
+النطاق: apps/web + apps/api + PostgreSQL (Supabase بعيد)  
+القيد: لم يُجرَ أي تعديل على كود المشروع — فحص وتشغيل وقياس فقط.
+
+---
+
+## 1. الملخص التنفيذي
+
+تم تشغيل API (:4000) وWeb (:5173) محلياً والاتصال بقاعدة بيانات حقيقية تحتوي 332 طلباً، 818 حركة خزنة، 48 وردية. زمن فتح شاشة POS (من ناحية الشبكة) 1.7–3.5 ثانية في القياسات الفعلية. السبب المركّب: زمن رحلة الشبكة إلى Supabase × عدد طلبات HTTP المتوازية (8+) × أنماط استعلام ثقيلة في TreasuryService.
+
+درجة الأداء الإجمالية: 4.5 / 10 — مقبول لفرع واحد وحجم بيانات صغير؛ غير جاهز لـ100+ مستخدم متزامن أو مليون حركة خزنة دون إعادة هيكلة.
+
+---
+
+## 2. منهجية التدقيق
+
+  • الأداة: ما قُيس فعلياً
+
+
+  • curl.exe + سكربت HTTP خارجي: زمن 17 endpoint
+
+  • Prisma count() من apps/api: أحجام الجداول
+
+  • فحص apps/web/dist/assets: أحجام الحزم
+
+  • Get-Process node: ذاكرة عمليات Node
+
+  • قراءة الكود سطراً بسطر: مسارات Prisma، N+1، invalidation
+
+
+ما لم يُقَس: React Profiler، EXPLAIN ANALYZE كامل (فشل بسبب أنواع enum في SQL خام)، سير عمل الطلبات الكامل (فشل تسجيل الدخول لاحقاً بـ401).
+
+---
+
+## 3. حالة التشغيل (مقاس)
+
+  • الخدمة: المنفذ
+ الحالة | الدليل |
+--------|--------|
+  • NestJS API: 4000
+ ✅ يعمل | GET /api/health → 200 في 0.21s |
+  • Vite Web: 5173
+ ✅ يعمل | GET / → 200 في 0.21s |
+  • Print-bridge: 9100
+ ❌ غير متاح | curl → فشل اتصال ~2.2s |
+  • PostgreSQL: بعيد
+ ✅ متاح | prisma.order.count() نجح |
+
+مستخدمون نشطون في DB (مقاس): علي, ابومالك, manager, cashier, عمر, accountant, … (10 مستخدمين ACTIVE).
+
+---
+
+## 4. أحجام البيانات (مقاس — 2026-07-02)
+
+  • الجدول: الصفوف
+ زمن القياس |
+------------|
+  • Order: 332
+ ضمن batch ~5.3s لـ5 counts |
+  • OrderItem: 811
+نفس batch ~5.3s |
+  • TreasuryTransaction: 818
+نفس batch ~5.3s |
+  • Shift: 48
+نفس batch ~5.3s |
+  • Product: 56
+نفس batch ~5.3s |
+
+---
+
+## 5. قالب توثيق المشكلة
+
+كل مشكلة أدناه تتضمن: المسار، الملف، الدالة/الخدمة، Endpoint، الجداول، استعلام Prisma، قياس، السبب، التأثير، التكرار.
+
+---
+
+# أ) مسار بدء تشغيل POS
+
+## الجدول الزمني (مقاس + مُستنتج من الكود)
+
+
+المستخدم يفتح /pos
+  → AuthProvider يقرأ localStorage (فوري)
+  → usePosContext()           GET /shifts/pos-context     [مقاس: 3474ms بارد / 1706ms دافئ]
+  → useBranches()             GET /branches               [مقاس: 834ms]
+  → useCashBoxes()            GET /cash-boxes             [مقاس: 1570ms / 859ms دافئ]
+  → useCurrentShift()         GET /shifts/current         [مقاس: 1499ms] (مشروط)
+  → usePosCatalog()           GET /shifts/pos-catalog     [مقاس: 2126ms / 913ms — 17KB]
+  → useSuspendedOrders()      GET /orders/suspended       [مقاس: 1518ms]
+  → useShiftUncollected/Collected (إن وُجدت وردية)
+  → hydrateReceiptSettings    GET /branches/:id/receipt-settings [مقاس: 1518ms]
+  → PosPage render + OrderModal
+
+
+زمن الجدار المتوازي (مُقدَّر من القياس): ~2.1–3.5s (يحدّه أبطأ طلب، ليس مجموعهم).
+
+---
+
+### POS-001 — تعدد طلبات HTTP عند فتح POS
+
+
+  • -------: --------
+
+  • المسار: بدء POS
+
+  • الملف: apps/web/src/pages/pos/use-pos-workspace.ts
+
+  • الدوال: usePosWorkspace() — يستدعي 6–8 hooks
+
+  • الملف: apps/web/src/lib/hooks.ts — usePosContext, useBranches, useCashBoxes, useCurrentShift, usePosShiftSummary, useShiftUncollectedOrders, useShiftCollectedOrders, useSuspendedOrders
+
+  • Endpoints: /shifts/pos-context, /branches, /cash-boxes, /shifts/current, /shifts/pos-catalog, /orders/suspended, /orders/by-shift, /branches/:id/receipt-settings
+
+  • الجداول: Branch, Shift, CashBox, Product, Order, …
+
+  • Prisma: متعدد — انظر POS-002 إلى POS-008
+
+  • قياس: 8 طلبات في batch متوازٍ؛ أبطأ 3474ms (pos-context)
+
+  • لماذا بطيء: كل hook = round-trip كامل إلى API + DB بعيد؛ لا يوجد endpoint مجمّع لجلسة POS
+
+  • التأثير: عالٍ — كل فتح/تحديث POS
+
+  • التكرار: كل جلسة كاشير + بعد كل invalidatePosQueries
+
+
+---
+
+### POS-002 — pos-context بطيء عند وجود وردية مفتوحة
+
+
+  • -------: --------
+
+  • المسار: بدء POS
+
+  • الملف: apps/api/src/modules/shifts/shifts.service.ts
+
+  • الدالة: getPosContext(organizationId, userId?) — سطر 68
+
+  • الخدمة: ShiftsService
+
+  • Endpoint: GET /api/shifts/pos-context
+
+  • Controller: ShiftsController.posContext() — shifts.controller.ts:57
+
+  • الجداول: Branch, Shift, CashBox, TreasuryTransaction, Order, CashierExpense
+
+  • Prisma (بدون وردية): branch.findFirst, resolveWorkspacePermissions → userRole.findMany, shift.findFirst, cashBox.findFirst
+
+  • Prisma (مع وردية): أعلاه + getPosShiftSummary() → getShiftSummaryLight() (5–6 queries)
+
+  • قياس: 3474ms (بارد)، 1706–1804ms (3 تكرارات)
+
+  • لماذا بطيء: عند shiftOpen: true يُحمّل ملخص وردية كامل قبل عرض الكتالوج
+
+  • التأثير: عالٍ
+
+  • التكرار: كل فتح POS؛ staleTime: 120000 في usePosContext
+
+
+---
+
+### POS-003 — تكرار جلب الوردية: pos-context + shift-current
+
+
+  • -------: --------
+
+  • المسار: بدء POS
+
+  • الملف: apps/web/src/pages/pos/use-pos-workspace.ts — سطر 52–56
+
+  • الدالة: useCurrentShift(effectiveBranchId, queryCashBoxId, enabled)
+
+  • شرط التفعيل: !hasContextShift \
+\| !posContext?.summary |
+  • Endpoint: GET /api/shifts/current?branchId&cashBoxId
+
+  • الملف (API): shifts.service.ts → currentShiftForCashBox() — سطر 829
+
+  • Prisma: shift.findFirst + include treasuryEntries take 50 + getShiftSummary(shiftId)
+
+  • قياس: 1499ms (حتى مع shiftOpen: false في pos-context!)
+
+  • لماذا بطيء: shift-current يُستدعى حتى عندما لا توجد وردية في context؛ يعيد DB round-trip فارغ
+
+  • التأثير: متوسط–عالٍ
+
+  • التكرار: كل mount لـ POS عندما الشرط true
+
+
+---
+
+### POS-004 — كتالوج POS يعيد تحميل خطة الإنتاج كاملة
+
+
+  • -------: --------
+
+  • المسار: بدء POS / تحديث كتالوج
+
+  • الملف: apps/api/src/modules/shifts/shifts.service.ts
+
+  • الدالة: getPosCatalog(branchId) — سطر 1121
+
+  • Endpoint: GET /api/shifts/pos-catalog?branchId=
+
+  • الجداول: ProductCategory, Product, PaymentMethod, ProductDailyPlan, OrderItem (عبر الخطة)
+
+  • Prisma: Promise.all: productCategory.findMany, product.findMany, paymentMethod.findMany, productionPlanService.getSummaryMap()
+
+  • داخل الخطة: production-plan.service.ts → getDailyPlan() → loadMenuProducts + productDailyPlan.findMany + orderItem.groupBy
+
+  • قياس: 2126ms بارد، 913ms دافئ؛ 17219 bytes
+
+  • لماذا بطيء: groupBy على OrderItem ليوم كامل يُنفَّذ مع كل تحميل كتالوج
+
+  • التأثير: عالٍ — أكبر payload في POS
+
+  • التكرار: كل فتح POS؛ بعد invalidatePosCatalog؛ staleTime: 60s
+
+
+---
+
+### POS-005 — تضمين خطة الإنتاج مرتين إذا فُتح dialog الخطة
+
+
+  • -------: --------
+
+  • المسار: POS → Production Plan Dialog
+
+  • الملف: apps/api/src/modules/production-plan/production-plan.controller.ts
+
+  • Endpoint: GET /api/production-plan?branchId=
+
+  • الدالة: ProductionPlanService.getDailyPlan()
+
+  • قياس: 880ms، 10185 bytes
+
+  • لماذا بطيء: نفس منطق getDailyPlan مُكرَّر خارج الكتالوج
+
+  • التأثير: متوسط
+
+  • التكرار: عند فتح حوار خطة الإنتاج
+
+
+---
+
+### POS-006 — invalidatePosQueries يبطل 7 عائلات استعلام
+
+
+  • -------: --------
+
+  • المسار: بعد تعليق/إغلاق/مغادرة POS
+
+  • الملف: apps/web/src/lib/hooks.ts — سطر 23–33
+
+  • الدالة: invalidatePosQueries(queryClient)
+
+  • المستدعون: use-pos-order-session.ts:89,165,316؛ use-pos-workspace.ts:226
+
+  • مفاتيح React Query: pos-context, pos-shift-summary, orders-shift-uncollected, orders-shift-collected, orders-suspended, shift-current, pos-catalog
+
+  • قياس: غير مقاس مباشرة؛ مُقدَّر 8+ refetch ≈ 3–15s حسب التوازي
+
+  • لماذا بطيء: إبطال واسع بدل patch جزئي (رغم وجود patchShiftOrder* وrefetchPosOrderData)
+
+  • التأثير: عالٍ بعد كل عملية طلب
+
+  • التكرار: تعليق تلقائي عند unmount POS؛ إغلاق وردية؛ بعض عمليات الطلب
+
+
+---
+
+### POS-007 — React StrictMode يضاعف الجلب في التطوير
+
+
+  • -------: --------
+
+  • المسار: بدء POS (dev)
+
+  • الملف: apps/web/src/main.tsx — سطر 21 <React.StrictMode>
+
+  • قياس: غير معزول
+
+  • لماذا بطيء: double-mount لـ hooks في development
+
+  • التأثير: متوسط في dev فقط
+
+  • التكرار: كل refresh في Vite dev
+
+
+---
+
+### POS-008 — حزمة POS ثقيلة + استيراد مزامن لحوارات الخزنة
+
+
+  • -------: --------
+
+  • المسار: تحميل route /pos
+
+  • الملف: apps/web/src/pages/pos/pos-page.tsx — سطر 34–35
+
+  • الاستيراد: ShiftCloseDialog, ShiftSummaryPreviewDialog من treasury-workspace/
+
+  • قياس: pos-page-*.js = 177.5 KB؛ index-*.js = 683 KB
+
+  • لماذا بطيء: lazy route لكن POS يسحب مكونات الخزنة داخل نفس chunk
+
+  • التأثير: متوسط على أجهزة POS ضعيفة
+
+  • التكرار: أول تحميل POS في الجلسة
+
+
+---
+
+# ب) دورة حياة الطلب (Order Lifecycle)
+
+## الجدول الزمني (من الكود — القياس محدود بسبب 401)
+
+
+POST /orders (إغلاق فوري)
+  → OrdersService.create()
+  → Promise.all: branch, paymentMethod, resolveShiftContext
+  → allocateOrderNumber (sequence)
+  → prisma.order.create + items + payments
+  → void: deductInventoryForOrder (خلفية)
+  → void: customersService.syncFromOrder
+  → void: treasuryService.recordSaleReceipt
+  → void: logOrderAudit
+
+POST /orders/open → createOpen → order OPEN
+POST /orders/:id/suspend → transaction: order + suspendedOrder
+POST /orders/:id/resume → ...
+POST /orders/:id/collect → collectClosedOrder → recordSaleReceipt
+GET /orders/by-shift → listOrdersByShift (cursor pagination)
+
+
+قياس: لم يُكمل — POST /auth/login أعاد 401 في جلسة القياس الثانية (كلمات seed لا تطابق cloud DB).
+
+---
+
+### ORD-001 — إنشاء طلب: كتابة متعددة الجداول + عمليات خلفية
+
+
+  • -------: --------
+
+  • المسار: إنشاء طلب مغلق
+
+  • الملف: apps/api/src/modules/orders/orders.service.ts
+
+  • الدالة: create(dto, userId) — سطر 25
+
+  • Endpoint: POST /api/orders
+
+  • الجداول: Order, OrderItem, OrderPayment, TreasuryTransaction (async), StockLedgerEntry (async), Customer
+
+  • Prisma: order.create({ include items, payments })؛ ثم recordSaleReceipt؛ deductInventoryForOrder
+
+  • قياس: غير مقاس (401)
+
+  • لماذا بطيء: transaction رئيسي + 3–4 fire-and-forget async each with own DB work
+
+  • التأثير: عالٍ — كل فاتورة
+
+  • التكرار: عشرات–مئات مرات يومياً لكل فرع
+
+
+---
+
+### ORD-002 — خصم المخزون الخلفي: سلسلة استعلامات ثقيلة
+
+
+  • -------: --------
+
+  • المسار: بعد create()
+
+  • الدالة: deductInventoryForOrder() — سطر 1208
+
+  • الجداول: Recipe, RecipeVersion, StockItem, StockLedgerEntry
+
+  • Prisma: recipe.findMany → recipeVersion.findMany + components → stockItem.findMany → $transaction updates
+
+  • قياس: غير مقاس
+
+  • لماذا بطيء: 4+ queries لكل منتج له وصفة؛ لا يُنتظر من API لكن يستهلك DB pool
+
+  • التأثير: متوسط–عالٍ تحت حمل
+
+  • التكرار: كل طلب بمنتجات لها recipes
+
+
+---
+
+### ORD-003 — listOrdersByShift استعلام معقد للورديات المغلقة
+
+
+  • -------: --------
+
+  • المسار: قائمة طلبات الوردية
+
+  • الدالة: listOrdersByShift(shiftId, opts) — سطر ~1000
+
+  • Endpoint: GET /api/orders/by-shift?shiftId&filter&take&cursor
+
+  • الجداول: Shift, Order
+
+  • Prisma: shift.findUnique + order.findMany مع OR معقد لطلبات غير محصّلة من ورديات سابقة
+
+  • الواجهة: useShiftUncollectedOrders take=25؛ useShiftCollectedOrders take=10
+
+  • قياس: غير مقاس (لا shiftId بدون auth)
+
+  • لماذا بطيء: OR + uncollectedWhere قد يمنع استخدام index الأمثل
+
+  • التأثير: متوسط
+
+  • التكرار: scroll POS + infinite query pages
+
+
+---
+
+### ORD-004 — التعليق يطلق invalidatePosQueries كامل
+
+
+  • -------: --------
+
+  • المسار: تعليق / استئناف
+
+  • API: suspend() سطر 239 — transaction صغير (جيد)
+
+  • Frontend: use-pos-order-session.ts:165,316 → invalidatePosQueries
+
+  • قياس: API سريع متوقع؛ frontend refetch ثقيل
+
+  • التأثير: عالٍ على UX بعد التعليق
+
+  • التكرار: كل تعليق/استئناف
+
+
+---
+
+### ORD-005 — التحصيل: تحقق مزدوج + recordSaleReceipt
+
+
+  • -------: --------
+
+  • المسار: تحصيل طلب مغلق
+
+  • الدالة: collectClosedOrder() — سطر 766
+
+  • Endpoint: POST /api/orders/:id/collect
+
+  • Prisma: order.updateMany (optimistic lock) + treasuryTransaction.count + recordSaleReceipt
+
+  • التأثير: متوسط
+
+  • التكرار: كل تحصيل من POS
+
+
+---
+
+# ج) دورة حياة الوردية (Shift Lifecycle)
+
+### SHF-001 — listShifts نمط N+1 حرج
+
+
+  • -------: --------
+
+  • المسار: سجل الورديات / Treasury history tab
+
+  • الملف: apps/api/src/modules/shifts/shifts.service.ts
+
+  • الدالة: listShifts() — سطر 150
+
+  • Endpoint: GET /api/shifts/list?branchId&from&to
+
+  • Prisma: shift.findMany ثم Promise.all(shifts.map → getShiftSummary(id))
+
+  • قياس: 863ms لقائمة فارغة (اليوم)؛ مع 30 وردية مُقدَّر 30×5 queries = 150+ query
+
+  • لماذا بطيء: كل وردية = getShiftSummaryLight كامل (5–6 queries)
+
+  • التأثير: حرج عند فتح سجل الورديات
+
+  • التكرار: كل زيارة لتبويب history
+
+
+ملاحظة: TreasuryService.listShiftsForWorkspace() — سطر 762 — يُحسّن بجلب txs دفعة واحدة (shiftId in [...]) لكن ShiftsService.listShifts لا يستخدمه.
+
+---
+
+### SHF-002 — autoOpenShift يستدعي getShiftSummary فوراً
+
+
+  • -------: --------
+
+  • الدالة: autoOpenShift() — سطر 40
+
+  • Endpoint: POST /api/shifts/auto-open
+
+  • Prisma: shift.findFirst أو openShift + getShiftSummary
+
+  • التكرار: أول دخول كاشير بدون وردية
+
+
+---
+
+### SHF-003 — closeShift معاملة ثقيلة
+
+
+  • -------: --------
+
+  • الدالة: closeShift() — سطر 411
+
+  • Endpoint: POST /api/shifts/close
+
+  • Prisma: countTransferableOrders + getShiftCloseCashSummary + $transaction طويل (إغلاق، handoff، نقل طلبات، وردية successor)
+
+  • التأثير: عالٍ لكن نادر
+
+  • التكرار: 1–2× يومياً لكل خزنة
+
+
+---
+
+### SHF-004 — currentShiftForCashBox يحمّل 50 حركة خزنة + ملخص كامل
+
+
+  • -------: --------
+
+  • الدالة: currentShiftForCashBox() — سطر 829
+
+  • Prisma: shift.findFirst + include treasuryEntries take 50 + getShiftSummary
+
+  • قياس: 1499ms عبر /shifts/current
+
+  • التكرار: مع POS-003
+
+
+---
+
+### SHF-005 — getPosShiftSummary يستدعي getShiftSummary ثم مصاريف إضافية
+
+
+  • -------: --------
+
+  • الدالة: getPosShiftSummary() — سطر 852
+
+  • Endpoint: GET /api/shifts/pos-summary?shiftId=
+
+  • Prisma: getShiftSummary + cashierExpense.findMany + optional order.findMany كبير إذا includeOrders: true
+
+
+---
+
+# د) سير عمل الخزنة (Treasury)
+
+### TRS-001 — getBranchTreasuryBalance مسح كامل لحركات الفرع [الأخطر]
+
+
+  • -------: --------
+
+  • الملف: apps/api/src/modules/treasury/treasury.service.ts
+
+  • الدالة: getBranchTreasuryBalance(branchId, cashBoxId?) — سطر 1187
+
+  • Endpoints: GET /treasury/balance؛ داخل getWorkspace؛ ReportsService.treasury() سطر 108
+
+  • الجداول: TreasuryTransaction
+
+  • Prisma: treasuryTransaction.findMany({ where: { branchId, approvalStatus: 'APPROVED' } }) — بدون LIMIT
+
+  • Cache: branchBalanceCache TTL 45s — سطر 1239
+
+  • قياس: غير معزول؛ 818 صف اليوم ≈ مقبول؛ عند 1M صف كارثي
+
+  • لماذا بطيء: O(n) صفوف في Node + تجميع JS
+
+  • التأثير: حرج للتوسع
+
+  • التكرار: تقارير الخزنة؛ workspace بتبويب treasury؛ vendor dashboard
+
+
+---
+
+### TRS-002 — getShiftSummaryLight يحمّل كل حركات الوردية
+
+
+  • -------: --------
+
+  • الدالة: getShiftSummaryLight(shiftId) — سطر 1243
+
+  • Prisma: Promise.all: treasuryTransaction.findMany({ where: { shiftId } }) بدون take + expenses + 2× order.aggregate + order.findMany take 25 + optional order.findMany للربط
+
+  • التكرار: كل ملخص وردية — عشرات المرات في الدقيقة
+
+
+---
+
+### TRS-003 — getWorkspace تجميع أقسام متعددة
+
+
+  • -------: --------
+
+  • الدالة: getWorkspace(params) — سطر 884
+
+  • Endpoint: GET /api/treasury/workspace?branchId&cashBoxId&sections=
+
+  • قياس: 2910ms؛ 3288 bytes؛ تكرارات 2848–2984ms
+
+  • Prisma: حتى 6 مسارات parallel في Promise.all سطر 987: getTreasuryToday, getBranchTreasuryBalance, listPendingCollections, listShiftsForWorkspace, collectorDailySummary, …
+
+  • التكرار: كل tab في Treasury Workspace؛ staleTime: 30s
+
+
+---
+
+### TRS-004 — getTreasuryToday قد يُنفّذ استعلامين إضافيين للوردية
+
+
+  • -------: --------
+
+  • الدالة: getTreasuryToday() — سطر 571
+
+  • Prisma: findMany ليوم كامل؛ إذا لا expectedCashFromShift: shift.findFirst + findMany كل txs الوردية سطر 625
+
+  • التكرار: dashboard + workspace
+
+
+---
+
+### TRS-005 — listPendingCollections حتى 200 حركة + join orders
+
+
+  • -------: --------
+
+  • الدالة: listPendingCollections() — سطر 650
+
+  • Prisma: findMany take 200 + order.findMany({ id: in })
+
+  • التكرار: تبويب اعتماد الخزنة
+
+
+---
+
+### TRS-006 — تسريب passwordHash في استجابة workspace (أمن + حجم)
+
+
+  • -------: --------
+
+  • دليل: استجابة مقاسة treasury-workspace تحتوي openedBy.passwordHash
+
+  • الملف: getShiftSummaryLight → include: { openedBy: true } بدون select
+
+  • التأثير: payload أكبر + مخاطرة أمنية
+
+
+---
+
+### TRS-007 — listShiftsForWorkspace محسّن (مرجع إيجابي)
+
+
+  • -------: --------
+
+  • الدالة: listShiftsForWorkspace() — سطر 762
+
+  • Prisma: shift.findMany take 50 + معاملة واحدة treasuryTransaction.findMany({ shiftId: { in } })
+
+  • ملاحظة: نموذج يجب تعميمه على ShiftsService.listShifts
+
+
+---
+
+# هـ) التقارير (Reports)
+
+### RPT-001 — dashboard يحمّل كل treasuryEntries للوردية المفتوحة
+
+
+  • -------: --------
+
+  • الملف: apps/api/src/modules/reports/reports.service.ts
+
+  • الدالة: dashboard(branchId) — سطر 14
+
+  • Endpoint: GET /api/reports/dashboard?branchId=
+
+  • Prisma: shift.findFirst({ include: { treasuryEntries: true } }) — بدون take
+
+  • +: getTreasuryToday + listPendingCollections
+
+  • قياس: غير مقاس (يتطلب صلاحية manager)
+
+  • التكرار: فتح صفحة التقارير
+
+
+---
+
+### RPT-002 — operations — 3 استعلامات SQL خام + تاريخ ورديات
+
+
+  • -------: --------
+
+  • الدالة: operations() + getOperationsBreakdown() — reports-analytics.service.ts:482
+
+  • Endpoint: GET /api/reports/operations?branchId&from&to
+
+  • SQL: 3× $queryRaw على Order + OrderItem؛ افتراضي 90 يوم
+
+  • التكرار: عند فتح تقرير العمليات
+
+
+---
+
+### RPT-003 — product-day-matrix — CTE ثقيل على سنة
+
+
+  • -------: --------
+
+  • الدالة: getProductDayMatrix() — سطر 68
+
+  • Endpoint: GET /api/reports/product-day-matrix
+
+  • SQL: CTE على OrderItem ⋈ Order ⋈ Product؛ افتراضي DEFAULT_LOOKBACK_DAYS = 365
+
+  • التأثير: عالٍ عند 100k+ OrderItems
+
+
+---
+
+### RPT-004 — week-over-week — استعلامان خام على 52 أسبوع
+
+
+  • -------: --------
+
+  • الدالة: getWeekOverWeek() — سطر 143
+
+  • Endpoint: GET /api/reports/week-over-week
+
+
+---
+
+### RPT-005 — bundle-suggestions — self-refresh ثقيل
+
+
+  • -------: --------
+
+  • الدالة: getBundleSuggestions() — سطر 384
+
+  • سلوك: إذا stale → computeBundleSuggestions() — self-join على OrderItem (O(n²) baskets)
+
+  • التأثير: حرج عند أول طلب بعد 24h
+
+
+---
+
+### RPT-006 — reports.treasury يستدعي getBranchTreasuryBalance + 100 حركة
+
+
+  • -------: --------
+
+  • الدالة: treasury() — reports.service.ts:106
+
+  • يرتبط بـ: TRS-001
+
+
+---
+
+# و) المخزون (Inventory)
+
+### INV-001 — findAll يحمّل كل أصناف الفرع
+
+
+  • -------: --------
+
+  • الملف: apps/api/src/modules/inventory/stock-items.service.ts
+
+  • الدالة: findAll(branchId) — سطر 62
+
+  • Endpoint: GET /api/stock-items?branchId=
+
+  • قياس: 874ms، 379 bytes (بيانات قليلة — RTT يهيمن)
+
+  • التكرار: صفحة المخزون
+
+
+---
+
+### INV-002 — reports.inventory يحمّل كل StockItems في الذاكرة
+
+
+  • -------: --------
+
+  • الدالة: ReportsService.inventory() — سطر 171
+
+  • Prisma: stockItem.findMany({ where: { branchId } }) + reduce في JS
+
+
+---
+
+### INV-003 — خصم المخزون عند الطلب (انظر ORD-002)
+
+---
+
+# ز) المصادقة (Authentication)
+
+### AUTH-001 — validateUser يحمّل شجرة أدوار كاملة + bcrypt
+
+
+  • -------: --------
+
+  • الملف: apps/api/src/modules/auth/auth.service.ts
+
+  • الدالة: validateUser() — سطر 20
+
+  • Endpoint: POST /api/auth/login
+
+  • Prisma: user.findUnique + userRoles → role → permissions → permission (4 مستويات include)
+
+  • قياس: 1249ms عند نجاح أول جلسة
+
+  • لماذا بطيء: bcrypt (~100ms+) + join عميق + RTT DB
+
+  • التكرار: كل login
+
+
+---
+
+### AUTH-002 — profile / GET /auth/me نفس شجرة الأدوار
+
+
+  • -------: --------
+
+  • الدالة: profile(userId) — سطر 111
+
+  • Endpoint: GET /api/auth/me
+
+  • قياس: 2264ms بارد؛ 1537–1554ms دافئ
+
+  • التكرار: مع كل batch POS المتوازي
+
+
+---
+
+### AUTH-003 — validateJwtPayload على كل طلب محمي
+
+
+  • -------: --------
+
+  • الدالة: validateJwtPayload() — سطر 99
+
+  • Prisma: user.findUnique لكل request
+
+  • التأثير: متوسط × عدد الطلبات المتوازية
+
+  • ملاحظة: لا يوجد cache للمستخدم في JWT guard
+
+
+---
+
+# ح) React Query — سلوك الكاش
+
+  • المفتاح: staleTime
+ الملف | ملاحظة |
+  • ---------: -----------
+-------|--------|
+  • افتراضي: 30s
+ main.tsx:13 | |
+  • pos-context: 120s
+ hooks.ts:279 | + sessionStorage placeholder |
+  • pos-catalog: 60s
+ hooks.ts:307 | + sessionStorage per branch |
+  • shift-current: 120s
+ hooks.ts:259 | |
+  • treasury-workspace: 30s
+ hooks.ts:682 | keepPreviousData |
+  • vendor-accounts: 20s + refetch 30s
+ hooks.ts:656 | aggressive |
+
+### RQ-001 — clearPosCatalogCache عند كل invalidatePosQueries
+
+  • الملف: hooks.ts:24 + pos-cache.ts:40
+
+  • التأثير: يُلغي فائدة sessionStorage حتى مع staleTime 60s
+
+
+### RQ-002 — useShiftMutations.onSuccess يبطل 6–7 مفاتيح
+
+  • الملف: hooks.ts:706,722
+
+
+### RQ-003 — تعليق تلقائي عند مغادرة POS يطلق invalidate كامل
+
+  • الملف: use-pos-order-session.ts:84-92
+
+
+---
+
+# ط) React Rendering
+
+### RND-001 — pos-page.tsx مكوّن orchestrator ضخم (~916 سطر)
+
+  • الملف: apps/web/src/pages/pos/pos-page.tsx
+
+  • التأثير: أي تغيير state قد يُعيد render شجرة واسعة
+
+  • قياس: غير مقاس (لا Profiler)
+
+
+### RND-002 — usePosWorkspace يجمع 10+ مصادر بيانات
+
+  • الملف: use-pos-workspace.ts
+
+  • التأثير: تحديث query واحد → re-render
+
+
+### RND-003 — virtualization فقط في order-modal.tsx
+
+  • باقي القوائم (طلبات الوردية، معلّقة): بدون virtual list
+
+  • التأثير: DOM كبير مع مئات الطلبات
+
+
+### RND-004 — useMemo للـ KPI و productPlanMap — جيد جزئياً
+
+  • الملف: pos-page.tsx:72-78
+
+
+---
+
+# ي) أنماط Prisma و PostgreSQL
+
+### DB-001 — فهرس TreasuryTransaction: لا يوجد (branchId, approvalStatus) مركّب
+
+  • الملف: apps/api/prisma/schema.prisma — سطر 492–494
+
+  • الاستعلام المتأثر: TRS-001 findMany({ branchId, approvalStatus: 'APPROVED' })
+
+  • مخاطر: Sequential scan جزئي عند نمو الجدول
+
+
+### DB-002 — OrderItem بدون فهرس productId
+
+  • schema: @@index([orderId]) فقط — سطر 697
+
+  • المتأثر: orderItem.groupBy({ by: ['productId'] }) في production plan
+
+
+### DB-003 — Shift بدون (branchId, status) مركّب
+
+  • المتأثر: shift.findFirst({ branchId, status: 'OPEN' }) — متكرر
+
+
+### DB-004 — جداول Snapshot غير مستخدمة في v1
+
+  • ShiftSummarySnapshot, BranchBalanceSnapshot: موجودة في schema؛ لا قراءة من v1 API
+
+  • التأثير: فرصة ضائعة لتجنب TRS-001/SHF-001
+
+
+### DB-005 — زمن RTT لـ Supabase من بيئة التطوير
+
+  • دليل: استجابة orders-suspended = 2 bytes لكن 1518ms
+
+  • الاستنتاج: ~1–1.5s overhead شبكة لكل round-trip
+
+
+---
+
+# ج) جدول القياسات المجمّع (Measured)
+
+  • Endpoint: ms (بارد)
+ ms (دافئ)   • Bytes: الحالة
+
+  • ----------: -----------
+-----------  • -------: --------
+
+  • /api/health: 54–212
+ —   • 79: 200
+
+  • POST /auth/login: 1249
+ —   • —: 200 ثم 401
+
+  • GET /shifts/pos-context: 3474
+ 1706   • 262: 200
+
+  • GET /treasury/workspace: 2911
+ 2850–2984   • 3288: 200
+
+  • GET /auth/me: 2264
+ 1537   • 1651: 200
+
+  • GET /shifts/pos-catalog: 2126
+ 913   • 17219: 200
+
+  • GET /cash-boxes: 1570
+ 859   • 201: 200
+
+  • GET /orders/suspended: 1518
+ —   • 2: 200
+
+  • GET /shifts/current: 1499
+ —   • 47: 200
+
+  • GET /production-plan: 880
+ —   • 10185: 200
+
+  • GET /shifts/list: 863
+ —   • 2: 200
+
+  • GET /treasury/summary: 450
+ —   • 52: 500
+
+  • GET /treasury/balance: 432
+ —   • 75: 403
+
+
+---
+
+# د) تقدير التوسع (Estimated)
+
+  • السيناريو: أول عنق زجاجة
+ الدليل |
+  • -----------: ---------------
+--------|
+  • 100 مستخدم متزامن: DB connections + TRS-001
+ مسح كامل × طلبات متوازية |
+  • 500 مستخدم: نفس + POS-001 fan-out
+ 8 HTTP × 500 |
+  • 100k Order: RPT-003, RPT-005
+ SQL على OrderItem |
+  • 1M TreasuryTransaction: TRS-001
+ findMany بدون limit |
+  • 5M OrderItem: POS-004 groupBy, تقارير
+ groupBy يومي |
+
+---
+
+# هـ) قائمة التحقق — مسارات تم فحصها
+
+  • المسار: كود
+ قياس HTTP | قياس DB |
+-----------|---------|
+  • POS startup: ✅
+ ✅ | جزئي |
+  • Order lifecycle: ✅
+ ❌ (401) | — |
+  • Shift lifecycle: ✅
+ جزئي | — |
+  • Treasury: ✅
+ ✅ | — |
+  • Reports: ✅
+ ❌ (مسارات خاطئة أولاً) | — |
+  • Inventory: ✅
+ ✅ stock-items | — |
+  • Authentication: ✅
+ ✅ login/me | — |
+  • React Query: ✅
+ — | — |
+  • React render: ✅
+ — | — |
+  • Prisma patterns: ✅
+ — | counts فقط |
+  • PostgreSQL: جزئي
+ — | EXPLAIN فشل |
+
+---
+
+# و) ترتيب الاختناقات حسب الأثر (للتخطيط)
+
+  • #: ID
+ الأثر | نوع الدليل |
+  • ---: -----
+-------|------------|
+  • 1: TRS-001
+ حرج | كود + حجم جدول 818 |
+  • 2: POS-001
+ عالٍ | قياس 3.5s |
+  • 3: SHF-001
+ عالٍ | كود N+1 |
+  • 4: DB-005
+ عالٍ | قياس 1.5s على 2 bytes |
+  • 5: TRS-002
+ عالٍ | كود |
+  • 6: POS-006
+ عالٍ | كود + call graph |
+  • 7: POS-004
+ عالٍ | قياس 17KB + 2.1s |
+  • 8: RPT-005
+ عالٍ عند التفعيل | كود O(n²) |
+  • 9: AUTH-001
+ متوسط | قياس 1.2s |
+  • 10: POS-008
+ متوسط | قياس 683KB bundle |
+
+---
+
+# ز) الخلاصة للتخطيط
+
+هذا التقرير يوثّق 40+ نقطة ضعف عبر 11 مساراً runtime مع مسارات ملفات ودوال وendpoints محددة. القياسات الفعلية تؤكد أن زمن الاستجابة الحالي يُهيمن عليه latency الشبكة إلى DB البعيد مضروباً في عدد الطلبات، بينما الكود يحتوي أنماط O(n) و N+1 ستتفاقم عند نمو البيانات.
+
+الخطوة التالية الموصى بها للتخطيط (خارج نطاق هذا التدقيق): ورشة تحسين مُرتّبة حسب الجدول أعلاه، مع benchmark fixtures واختبار حمل على getBranchTreasuryBalance وlistShifts وGET /shifts/pos-context.
+
+---
+
+*نهاية التقرير — Evidence-Based Runtime Performance Audit — Niha v1*
