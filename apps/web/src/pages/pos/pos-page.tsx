@@ -17,7 +17,7 @@ import {
   useMediaQuery,
   useTheme,
 } from '@mui/material';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import type { SavedOrder } from '../../lib/pos-store.js';
@@ -26,21 +26,17 @@ import { enqueuePosPrint, preloadPosPrintPipeline } from '../../lib/pos-print-qu
 import { fetchOrderDetailForPos } from '../../lib/pos-order-detail.js';
 import { isPrintBridgeOnline } from '../../lib/pos-print-bridge.js';
 import { getReceiptSettings } from '../../lib/pos-receipt-settings.js';
+import { markPosPerf } from '../../lib/pos-perf.js';
 import { OrderAuditDialog } from './components/order-audit-dialog.js';
 import { OrderSummaryDialog } from './components/order-summary-dialog.js';
 import { apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
 import { parseApiErrorBody } from '../../lib/api-client.js';
 import { patchShiftOrderRemoved, patchShiftOrderUncollected } from '../../lib/hooks.js';
-import { ShiftCloseDialog } from '../treasury-workspace/components/shift-close-dialog.js';
-import { ShiftSummaryPreviewDialog } from '../treasury-workspace/components/shift-summary-preview-dialog.js';
 import type { ShiftSummaryPrintParams } from '../../lib/shift-summary-print.js';
 import { formatShiftDuration, formatShiftMoney, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
 import { ALL_CATEGORIES, type PaymentMethodOption } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
-import { OrderModal } from './components/order-modal.js';
 import { PosKpiGrid } from './components/pos-kpi-grid.js';
-import { ProductionPlanDialog } from './components/production-plan-dialog.js';
-import { PrintSetupDialog } from './components/print-setup-dialog.js';
 import { ShiftOrdersSection } from './components/shift-orders-section.js';
 import { SuspendedSection } from './components/suspended-section.js';
 import { usePosCatalog } from './use-pos-catalog.js';
@@ -54,6 +50,22 @@ import { canManagePosPrinting, hasPermission } from '../../lib/permissions.js';
 import { useDesktopUpdate } from '../../hooks/use-desktop-update.js';
 import { useDesktopVersion } from '../../hooks/use-desktop-version.js';
 
+const ProductionPlanDialog = lazy(() =>
+  import('./components/production-plan-dialog.js').then((m) => ({ default: m.ProductionPlanDialog })),
+);
+const PrintSetupDialog = lazy(() =>
+  import('./components/print-setup-dialog.js').then((m) => ({ default: m.PrintSetupDialog })),
+);
+const ShiftCloseDialog = lazy(() =>
+  import('../treasury-workspace/components/shift-close-dialog.js').then((m) => ({ default: m.ShiftCloseDialog })),
+);
+const ShiftSummaryPreviewDialog = lazy(() =>
+  import('../treasury-workspace/components/shift-summary-preview-dialog.js').then((m) => ({ default: m.ShiftSummaryPreviewDialog })),
+);
+const LazyOrderModal = lazy(() =>
+  import('./components/order-modal.js').then((m) => ({ default: m.OrderModal })),
+);
+
 export function PosPage() {
   const theme = useTheme();
   const navigate = useNavigate();
@@ -66,7 +78,9 @@ export function PosPage() {
   const canUsePrint = workspace.printingEnabled;
   const canTreasury = hasPermission(permissions, 'shifts.access');
   const canOpenShiftWorkspace = canTreasury || hasPermission(permissions, 'pos.use');
-  const catalog = usePosCatalog(workspace.effectiveBranchId, workspace.accessToken);
+  const catalog = usePosCatalog(workspace.effectiveBranchId, workspace.accessToken, {
+    skipFetch: workspace.catalogFromSession,
+  });
   const [snack, setSnack] = useState('');
   const [snackSeverity, setSnackSeverity] = useState<'success' | 'warning' | 'error' | 'info'>('success');
   const productPlanMap = useMemo(() => {
@@ -129,6 +143,16 @@ export function PosPage() {
   const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
   const deliveryDrivers = getReceiptSettings().deliveryDrivers;
 
+  useEffect(() => {
+    markPosPerf('mounted');
+  }, []);
+
+  useEffect(() => {
+    if (!workspace.shiftStatusPending) {
+      markPosPerf('interactive');
+    }
+  }, [workspace.shiftStatusPending]);
+
   const { data: stockItems = [] } = usePosExpenseStock(workspace.effectiveBranchId, expenseOpen && expenseKind === 'ITEM');
 
   const transferAvailable = useMemo(() => {
@@ -137,10 +161,21 @@ export function PosPage() {
   }, [workspace.displayPosSummary, transferFrom]);
 
   useEffect(() => {
-    if (workspace.shiftOpen && canUsePrint) {
+    if (!workspace.shiftOpen || !canUsePrint) return;
+    const run = () => {
       preloadPosPrintPipeline();
       void isPrintBridgeOnline();
-    }
+    };
+    const idleId = typeof requestIdleCallback !== 'undefined'
+      ? requestIdleCallback(run, { timeout: 2500 })
+      : window.setTimeout(run, 2000);
+    return () => {
+      if (typeof cancelIdleCallback !== 'undefined' && typeof idleId === 'number') {
+        cancelIdleCallback(idleId);
+      } else {
+        clearTimeout(idleId as number);
+      }
+    };
   }, [workspace.shiftOpen, canUsePrint]);
 
   useEffect(() => {
@@ -418,6 +453,9 @@ export function PosPage() {
             ) : null}
             {desktopUpdateLabel ? <Chip label={desktopUpdateLabel} size="small" variant="outlined" /> : null}
             <Chip label={shiftChipLabel} size="small" variant="outlined" />
+            {workspace.sessionBackgroundSyncing ? (
+              <Chip label="تحديث في الخلفية…" size="small" color="info" variant="outlined" />
+            ) : null}
             <Typography variant="caption" color="text.secondary">
               {workspace.posContext?.branch?.name ?? '—'} · {workspace.posContext?.cashBox?.name ?? '—'}
             </Typography>
@@ -473,7 +511,7 @@ export function PosPage() {
         posSummary={workspace.displayPosSummary}
         uncollectedCount={workspace.displayUncollectedCount}
         uncollectedAmount={workspace.displayUncollectedAmount}
-        suspendedCount={workspace.suspendedOrders.length}
+        suspendedCount={workspace.displaySuspendedCount}
         shiftNumber={workspace.shift?.shiftNumber}
         cashierName={workspace.shiftOperatorName}
         openedAt={workspace.shift?.openedAt}
@@ -483,6 +521,7 @@ export function PosPage() {
       <SuspendedSection
         orders={workspace.suspendedOrders}
         loading={workspace.suspendedPending}
+        totalCount={workspace.displaySuspendedCount}
         onResume={async (o) => {
           const res = await order.resumeSuspended(o);
           if (res.ok) notify(`تم استرجاع ${o.code}`);
@@ -549,7 +588,9 @@ export function PosPage() {
         + طلب جديد
       </Fab>
 
-      <OrderModal
+      {order.modalOpen ? (
+        <Suspense fallback={null}>
+          <LazyOrderModal
         open={order.modalOpen}
         mode={order.editMode ? 'edit' : 'create'}
         editBaselineQty={order.editBaselineQty}
@@ -619,7 +660,9 @@ export function PosPage() {
           return res;
         }}
         onClearCart={() => { order.resetOrder(); notify('تم إفراغ السلة.'); }}
-      />
+          />
+        </Suspense>
+      ) : null}
 
       {auditOrder ? (
         <OrderAuditDialog
@@ -641,7 +684,9 @@ export function PosPage() {
         onClose={() => setSummaryOrder(null)}
       />
 
-      <ProductionPlanDialog
+      {productionPlanOpen ? (
+        <Suspense fallback={null}>
+          <ProductionPlanDialog
         open={productionPlanOpen}
         branchId={workspace.effectiveBranchId}
         accessToken={workspace.accessToken}
@@ -650,7 +695,9 @@ export function PosPage() {
           notify('تم حفظ خطة الإنتاج.');
           void catalog.reload();
         }}
-      />
+          />
+        </Suspense>
+      ) : null}
 
       <Dialog open={collectOpen} onClose={() => { if (!collectBusy) { setCollectOpen(false); setCollectError(''); } }} fullWidth maxWidth="xs">
         <DialogTitle>تسجيل تحصيل في الدرج</DialogTitle>
@@ -678,8 +725,10 @@ export function PosPage() {
         </DialogActions>
       </Dialog>
 
-      {canUsePrint ? (
-        <PrintSetupDialog open={printSetupOpen} onClose={() => setPrintSetupOpen(false)} />
+      {canUsePrint && printSetupOpen ? (
+        <Suspense fallback={null}>
+          <PrintSetupDialog open={printSetupOpen} onClose={() => setPrintSetupOpen(false)} />
+        </Suspense>
       ) : null}
 
       <Dialog open={expenseOpen} onClose={() => setExpenseOpen(false)} fullWidth maxWidth="sm">
@@ -882,8 +931,9 @@ export function PosPage() {
         </DialogActions>
       </Dialog>
 
-      {workspace.shift ? (
-        <ShiftCloseDialog
+      {workspace.shift && shiftCloseDialog ? (
+        <Suspense fallback={null}>
+          <ShiftCloseDialog
           open={shiftCloseDialog}
           onClose={() => setShiftCloseDialog(false)}
           shiftId={workspace.shift.id}
@@ -901,15 +951,20 @@ export function PosPage() {
             setShiftCloseDialog(false);
             notify(res.message ?? 'تم إغلاق الوردية.');
           }}
-        />
+          />
+        </Suspense>
       ) : null}
 
-      <ShiftSummaryPreviewDialog
+      {summaryPreviewOpen && shiftSummaryPreviewParams ? (
+        <Suspense fallback={null}>
+          <ShiftSummaryPreviewDialog
         open={summaryPreviewOpen}
         onClose={() => setSummaryPreviewOpen(false)}
         params={shiftSummaryPreviewParams}
         onMessage={notify}
-      />
+          />
+        </Suspense>
+      ) : null}
     </Stack>
   );
 }

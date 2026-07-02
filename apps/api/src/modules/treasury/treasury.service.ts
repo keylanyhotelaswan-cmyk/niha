@@ -3,6 +3,7 @@ import { PaymentMethodType, Prisma, SafeType, TreasuryTransactionType } from '@p
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { aggregateExpensesByPaymentMethod, aggregateShiftWalletTransfers, netCollectionByMethod } from '../shifts/shift-collection-net.js';
+import type { CollectionMethodRow, ShiftWalletTransfers } from '../shifts/shift-collection-net.js';
 import { TransferDto } from './dto/transfer.dto.js';
 import { CreateMovementDto } from './dto/create-movement.dto.js';
 import { uncollectedOrderWhere } from '../orders/order-collection.util.js';
@@ -60,6 +61,37 @@ type BranchTreasuryBalance = SafeBalanceSummary & {
   walletBalances: WalletBalanceSummary;
   walletTotalsByPaymentMethod: Record<PaymentMethodType, number>;
 };
+
+type ShiftWithCashBox = Prisma.ShiftGetPayload<{ include: { cashBox: true; openedBy: true } }>;
+
+type ShiftSummaryLightResult = {
+  shift: ShiftWithCashBox;
+  transactions: Array<Record<string, unknown>>;
+  transactionCount: number;
+  ordersCount: number;
+  expensesTotal: number;
+  expensesByPaymentMethod: Record<string, number>;
+  walletTransfers: ShiftWalletTransfers;
+  netSalesByMethod: Record<string, CollectionMethodRow>;
+  uncollectedCount: number;
+  uncollectedTotal: number;
+  uncollectedOrders: Array<{ orderNumber: string; total: number; customerName: string | null }>;
+  openingFloat: number;
+  incoming: number;
+  outgoing: number;
+  pending: number;
+  expectedCash: number;
+  pendingCashInCustody: number;
+  byPaymentMethod: Record<string, { approved: number; pending: number }>;
+  salesByMethod: Record<string, { approved: number; pending: number; total?: number }>;
+  totalSales: number;
+};
+
+type ShiftSummaryReadOptions = {
+  preloadedShift?: ShiftWithCashBox;
+};
+
+const READ_SNAPSHOT_VERSION = 1;
 
 @Injectable()
 export class TreasuryService {
@@ -396,7 +428,7 @@ export class TreasuryService {
       throw new BadRequestException('Use profit withdrawal for withdrawing from profits safe');
     }
 
-    return this.prisma.treasuryTransaction.create({
+    const created = await this.prisma.treasuryTransaction.create({
       data: {
         branchId: params.branchId,
         cashBoxId: params.cashBoxId,
@@ -415,6 +447,12 @@ export class TreasuryService {
         note: params.note ?? null,
       },
     });
+    void this.invalidateReadSnapshots({
+      branchId: params.branchId,
+      cashBoxId: params.cashBoxId,
+      shiftId: params.shiftId ?? null,
+    }).catch(() => {});
+    return created;
   }
 
   async internalTransfer(params: {
@@ -482,6 +520,11 @@ export class TreasuryService {
         },
       }),
     ]);
+
+    void this.invalidateReadSnapshots({
+      branchId: params.branchId,
+      cashBoxId: params.cashBoxId,
+    }).catch(() => {});
 
     return { transferId, outgoing, incoming };
   }
@@ -1117,6 +1160,12 @@ export class TreasuryService {
       });
     }
 
+    void this.invalidateReadSnapshots({
+      branchId: tx.branchId,
+      cashBoxId: tx.cashBoxId,
+      shiftId: tx.shiftId,
+    }).catch(() => {});
+
     return updated;
   }
 
@@ -1181,7 +1230,39 @@ export class TreasuryService {
       });
     }
 
+    void this.invalidateReadSnapshots({
+      branchId: tx.branchId,
+      cashBoxId: tx.cashBoxId,
+      shiftId: tx.shiftId,
+    }).catch(() => {});
+
     return updated;
+  }
+
+  /** Drop persisted read snapshots after treasury or shift-aggregate writes. */
+  async invalidateReadSnapshots(params: {
+    branchId: string;
+    cashBoxId?: string | null;
+    shiftId?: string | null;
+  }) {
+    const { branchId, cashBoxId, shiftId } = params;
+    this.branchBalanceCache.delete(`${branchId}:${cashBoxId ?? 'all'}`);
+    this.branchBalanceCache.delete(`${branchId}:all`);
+
+    const deletes: Array<Promise<unknown>> = [
+      this.prisma.branchBalanceSnapshot.deleteMany({
+        where: {
+          branchId,
+          ...(cashBoxId
+            ? { OR: [{ cashBoxId }, { cashBoxId: null }] }
+            : {}),
+        },
+      }),
+    ];
+    if (shiftId) {
+      deletes.push(this.prisma.shiftSummarySnapshot.deleteMany({ where: { shiftId } }));
+    }
+    await Promise.all(deletes);
   }
 
   async getBranchTreasuryBalance(branchId: string, cashBoxId?: string): Promise<BranchTreasuryBalance> {
@@ -1189,6 +1270,12 @@ export class TreasuryService {
     const cached = this.branchBalanceCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
+    }
+
+    const fromSnapshot = await this.tryReadBranchBalanceSnapshot(branchId, cashBoxId);
+    if (fromSnapshot) {
+      this.branchBalanceCache.set(cacheKey, { expiresAt: Date.now() + 45_000, value: fromSnapshot });
+      return fromSnapshot;
     }
 
     const transactions = await this.prisma.treasuryTransaction.findMany({
@@ -1237,14 +1324,21 @@ export class TreasuryService {
       walletTotalsByPaymentMethod: walletTotals.byPaymentMethod,
     };
     this.branchBalanceCache.set(cacheKey, { expiresAt: Date.now() + 45_000, value: result });
+    void this.persistBranchBalanceSnapshot(branchId, cashBoxId, result).catch(() => {});
     return result;
   }
 
-  async getShiftSummaryLight(shiftId: string) {
-    const shift = await this.prisma.shift.findUnique({
-      where: { id: shiftId },
-      include: { cashBox: true, openedBy: true },
-    });
+  async getShiftSummaryLight(shiftId: string, opts?: ShiftSummaryReadOptions): Promise<ShiftSummaryLightResult> {
+    const fromSnapshot = await this.tryReadShiftSummarySnapshot(shiftId, opts?.preloadedShift);
+    if (fromSnapshot) {
+      return fromSnapshot;
+    }
+
+    const shift = opts?.preloadedShift
+      ?? await this.prisma.shift.findUnique({
+        where: { id: shiftId },
+        include: { cashBox: true, openedBy: true },
+      });
     if (!shift) {
       throw new NotFoundException('Shift not found');
     }
@@ -1338,7 +1432,7 @@ export class TreasuryService {
       total: Number(o.totalAmount),
       customerName: o.customerName,
     }));
-    return {
+    const result: ShiftSummaryLightResult = {
       shift,
       transactions: recentTransactions,
       transactionCount: allTxRows.length,
@@ -1353,10 +1447,150 @@ export class TreasuryService {
       ...totals,
       totalSales: Number(closedOrdersAgg._sum.totalAmount ?? 0),
     };
+    void this.persistShiftSummarySnapshot(result).catch(() => {});
+    return result;
   }
 
-  async getShiftSummary(shiftId: string) {
-    return this.getShiftSummaryLight(shiftId);
+  async getShiftSummary(shiftId: string, opts?: ShiftSummaryReadOptions) {
+    return this.getShiftSummaryLight(shiftId, opts);
+  }
+
+  private async tryReadBranchBalanceSnapshot(
+    branchId: string,
+    cashBoxId?: string,
+  ): Promise<BranchTreasuryBalance | null> {
+    const snap = await this.prisma.branchBalanceSnapshot.findFirst({
+      where: { branchId, cashBoxId: cashBoxId ?? null },
+    });
+    if (!snap) return null;
+    const json = snap.balanceJson as { v?: number; payload?: BranchTreasuryBalance } | null;
+    if (!json || json.v !== READ_SNAPSHOT_VERSION || !json.payload) return null;
+    return json.payload;
+  }
+
+  private async persistBranchBalanceSnapshot(
+    branchId: string,
+    cashBoxId: string | undefined,
+    result: BranchTreasuryBalance,
+  ) {
+    const where = { branchId, cashBoxId: cashBoxId ?? null };
+    const payload = {
+      expectedCash: result.physicalCash,
+      physicalCash: result.physicalCash,
+      profitsSafe: result.profitsSafe,
+      expensesSafe: result.expensesSafe,
+      balanceJson: { v: READ_SNAPSHOT_VERSION, payload: result } as Prisma.InputJsonValue,
+    };
+    const existing = await this.prisma.branchBalanceSnapshot.findFirst({ where });
+    if (existing) {
+      await this.prisma.branchBalanceSnapshot.update({ where: { id: existing.id }, data: payload });
+      return;
+    }
+    await this.prisma.branchBalanceSnapshot.create({
+      data: { ...where, ...payload },
+    });
+  }
+
+  private async tryReadShiftSummarySnapshot(
+    shiftId: string,
+    preloadedShift?: ShiftWithCashBox,
+  ): Promise<ShiftSummaryLightResult | null> {
+    const [snap, shift] = await Promise.all([
+      this.prisma.shiftSummarySnapshot.findUnique({ where: { shiftId } }),
+      preloadedShift?.id === shiftId
+        ? Promise.resolve(preloadedShift)
+        : this.prisma.shift.findUnique({
+            where: { id: shiftId },
+            include: { cashBox: true, openedBy: true },
+          }),
+    ]);
+    if (!snap || !shift) return null;
+
+    const json = snap.summaryJson as {
+      v?: number;
+      transactions?: ShiftSummaryLightResult['transactions'];
+      transactionCount?: number;
+      expensesByPaymentMethod?: Record<string, number>;
+      walletTransfers?: ShiftWalletTransfers;
+      netSalesByMethod?: Record<string, CollectionMethodRow>;
+      byPaymentMethod?: Record<string, { approved: number; pending: number }>;
+      salesByMethod?: Record<string, { approved: number; pending: number; total?: number }>;
+      uncollectedOrders?: ShiftSummaryLightResult['uncollectedOrders'];
+      pending?: number;
+    } | null;
+    if (!json || json.v !== READ_SNAPSHOT_VERSION) return null;
+
+    return {
+      shift,
+      transactions: json.transactions ?? [],
+      transactionCount: json.transactionCount ?? 0,
+      ordersCount: snap.ordersCount,
+      expensesTotal: Number(snap.expensesTotal),
+      expensesByPaymentMethod: json.expensesByPaymentMethod ?? {},
+      walletTransfers: json.walletTransfers ?? { transferOut: {}, transferIn: {} },
+      netSalesByMethod: json.netSalesByMethod ?? {},
+      uncollectedCount: snap.uncollectedCount,
+      uncollectedTotal: Number(snap.uncollectedTotal),
+      uncollectedOrders: json.uncollectedOrders ?? [],
+      openingFloat: Number(snap.openingFloat),
+      incoming: Number(snap.incoming),
+      outgoing: Number(snap.outgoing),
+      pending: typeof json.pending === 'number' ? json.pending : Number(snap.pendingCashInCustody),
+      expectedCash: Number(snap.expectedCash),
+      pendingCashInCustody: Number(snap.pendingCashInCustody),
+      byPaymentMethod: json.byPaymentMethod ?? {},
+      salesByMethod: json.salesByMethod ?? {},
+      totalSales: Number(snap.totalSales),
+    };
+  }
+
+  private shiftSummarySnapshotJson(result: ShiftSummaryLightResult): Prisma.InputJsonValue {
+    return {
+      v: READ_SNAPSHOT_VERSION,
+      transactions: result.transactions,
+      transactionCount: result.transactionCount,
+      expensesByPaymentMethod: result.expensesByPaymentMethod,
+      walletTransfers: result.walletTransfers,
+      netSalesByMethod: result.netSalesByMethod,
+      byPaymentMethod: result.byPaymentMethod,
+      salesByMethod: result.salesByMethod,
+      uncollectedOrders: result.uncollectedOrders,
+      pending: result.pending,
+    } as Prisma.InputJsonValue;
+  }
+
+  private async persistShiftSummarySnapshot(result: ShiftSummaryLightResult) {
+    const { shift } = result;
+    await this.prisma.shiftSummarySnapshot.upsert({
+      where: { shiftId: shift.id },
+      create: {
+        shiftId: shift.id,
+        openingFloat: result.openingFloat,
+        incoming: result.incoming,
+        outgoing: result.outgoing,
+        expectedCash: result.expectedCash,
+        pendingCashInCustody: result.pendingCashInCustody,
+        totalSales: result.totalSales,
+        expensesTotal: result.expensesTotal,
+        ordersCount: result.ordersCount,
+        uncollectedCount: result.uncollectedCount,
+        uncollectedTotal: result.uncollectedTotal,
+        summaryJson: this.shiftSummarySnapshotJson(result),
+      },
+      update: {
+        openingFloat: result.openingFloat,
+        incoming: result.incoming,
+        outgoing: result.outgoing,
+        expectedCash: result.expectedCash,
+        pendingCashInCustody: result.pendingCashInCustody,
+        totalSales: result.totalSales,
+        expensesTotal: result.expensesTotal,
+        ordersCount: result.ordersCount,
+        uncollectedCount: result.uncollectedCount,
+        uncollectedTotal: result.uncollectedTotal,
+        summaryJson: this.shiftSummarySnapshotJson(result),
+      },
+    });
   }
 
   /** ملخص خفيف لإغلاق الوردية — بدون قوائم الطلبات غير المحصّلة */

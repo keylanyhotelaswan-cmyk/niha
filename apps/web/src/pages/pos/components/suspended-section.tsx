@@ -5,15 +5,17 @@ import { OrderSummaryCard } from './order-summary-card.js';
 type SuspendedSectionProps = {
   orders: SavedOrder[];
   loading: boolean;
+  totalCount?: number;
   onResume: (order: SavedOrder) => void;
 };
 
-export function SuspendedSection({ orders, loading, onResume }: SuspendedSectionProps) {
+export function SuspendedSection({ orders, loading, totalCount, onResume }: SuspendedSectionProps) {
+  const count = totalCount ?? orders.length;
   return (
     <Box>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.5 }}>
         <Typography variant="h6" fontWeight={800}>طلبات معلّقة (سلة)</Typography>
-        {orders.length > 0 ? <Chip label={`${orders.length} طلب`} color="warning" size="small" /> : null}
+        <Chip label={`${count} طلب`} color={count > 0 ? 'warning' : 'default'} size="small" variant={count > 0 ? 'filled' : 'outlined'} />
       </Stack>
       {loading && orders.length === 0 ? (
         <Alert severity="info" sx={{ borderRadius: 3 }}>جاري تحميل الطلبات المعلّقة...</Alert>

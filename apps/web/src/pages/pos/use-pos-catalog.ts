@@ -5,10 +5,15 @@ import { isPaidSauceSku } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES, DEFAULT_PAYMENT_METHODS, type PaymentMethodOption } from './constants.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
 
-export function usePosCatalog(branchId: string, accessToken: string | null) {
+export function usePosCatalog(
+  branchId: string,
+  accessToken: string | null,
+  opts?: { skipFetch?: boolean },
+) {
   const catalogBranchId = branchId || readPosBranchId();
   const { data, isPending, isFetching, refetch } = usePosCatalogQuery(
     accessToken ? catalogBranchId : undefined,
+    !(opts?.skipFetch),
   );
   const [activeCategory, setActiveCategory] = useState(ALL_CATEGORIES);
 

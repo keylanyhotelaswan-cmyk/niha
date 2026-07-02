@@ -21,6 +21,7 @@ import {
   uncollectedOrderOrWhere,
   uncollectedOrderWhere,
 } from '../orders/order-collection.util.js';
+import { OrdersService } from '../orders/orders.service.js';
 
 const SHIFT_WALLET_METHOD_LABELS: Record<string, string> = {
   CASH: 'نقدي',
@@ -35,6 +36,7 @@ export class ShiftsService {
     private sequenceService: SequenceService,
     private treasuryService: TreasuryService,
     private productionPlanService: ProductionPlanService,
+    private ordersService: OrdersService,
   ) {}
 
   async autoOpenShift(openDto: OpenShiftDto, userId: string) {
@@ -92,7 +94,13 @@ export class ShiftsService {
     });
 
     if (openShift) {
-      const posSummary = await this.getPosShiftSummary(openShift.id, { includeOrders: false });
+      const treasurySummary = await this.treasuryService.getShiftSummary(openShift.id, {
+        preloadedShift: openShift,
+      });
+      const posSummary = await this.getPosShiftSummary(openShift.id, {
+        includeOrders: false,
+        treasurySummary,
+      });
       return {
         branch: { id: branch.id, name: branch.name },
         cashBox: { id: openShift.cashBox.id, name: openShift.cashBox.name },
@@ -135,6 +143,58 @@ export class ShiftsService {
       shift: null,
       summary: null,
       posSummary: null,
+    };
+  }
+
+  /** جلسة POS كاملة — طلب HTTP واحد لكل بيانات فتح الشاشة */
+  async getPosSession(organizationId: string, userId?: string) {
+    const context = await this.getPosContext(organizationId, userId);
+    const branchId = context.branch.id;
+    const shiftId = context.shift?.id;
+
+    const [catalog, cashBoxes, suspendedOrders, receiptSettings, orderPages] = await Promise.all([
+      this.getPosCatalog(branchId),
+      this.prisma.cashBox.findMany({
+        where: { branchId },
+        orderBy: { name: 'asc' },
+      }),
+      this.ordersService.listSuspended(branchId),
+      this.getBranchReceiptSettings(branchId),
+      shiftId
+        ? Promise.all([
+            this.ordersService.listClosedForShift(shiftId, { filter: 'uncollected', take: 25 }),
+            this.ordersService.listClosedForShift(shiftId, { filter: 'collected', take: 10 }),
+          ])
+        : Promise.resolve(null),
+    ]);
+
+    const [ordersUncollected, ordersCollected] = orderPages ?? [null, null];
+
+    return {
+      ...context,
+      cashBoxes,
+      catalog,
+      suspendedOrders,
+      receiptSettings,
+      ordersUncollected,
+      ordersCollected,
+    };
+  }
+
+  private async getBranchReceiptSettings(branchId: string) {
+    const branch = await this.prisma.branch.findUnique({
+      where: { id: branchId },
+      select: { receiptSettings: true, updatedAt: true },
+    });
+    if (!branch) {
+      throw new NotFoundException('Branch not found');
+    }
+    const settings = branch.receiptSettings;
+    return {
+      settings: settings && typeof settings === 'object' && !Array.isArray(settings)
+        ? (settings as Record<string, unknown>)
+        : null,
+      savedAt: branch.updatedAt.getTime(),
     };
   }
 
@@ -849,16 +909,18 @@ export class ShiftsService {
     return { shiftOpen: true, shift, summary };
   }
 
-  async getPosShiftSummary(shiftId: string, opts?: { includeOrders?: boolean }) {
+  async getPosShiftSummary(
+    shiftId: string,
+    opts?: { includeOrders?: boolean; treasurySummary?: Awaited<ReturnType<TreasuryService['getShiftSummary']>> },
+  ) {
     const includeOrders = opts?.includeOrders !== false;
 
-    const [treasurySummary, expenses] = await Promise.all([
-      this.treasuryService.getShiftSummary(shiftId),
-      this.prisma.cashierExpense.findMany({
-        where: { shiftId },
-        orderBy: { createdAt: 'desc' },
-      }),
-    ]);
+    const treasurySummary = opts?.treasurySummary
+      ?? await this.treasuryService.getShiftSummary(shiftId);
+    const expenses = await this.prisma.cashierExpense.findMany({
+      where: { shiftId },
+      orderBy: { createdAt: 'desc' },
+    });
     const shift = treasurySummary.shift;
     if (!shift) {
       throw new NotFoundException('Shift not found');
@@ -945,8 +1007,14 @@ export class ShiftsService {
     });
 
     const pendingReceiptOrderIds = treasurySummary.transactions
-      .filter((tx) => tx.transactionType === 'SALE_RECEIPT' && tx.approvalStatus === 'PENDING' && tx.sourceType === 'ORDER')
-      .map((tx) => tx.sourceId);
+      .filter(
+        (tx) =>
+          tx.transactionType === 'SALE_RECEIPT'
+          && tx.approvalStatus === 'PENDING'
+          && tx.sourceType === 'ORDER'
+          && typeof tx.sourceId === 'string',
+      )
+      .map((tx) => tx.sourceId as string);
     const loadedOrderIds = new Set(orders.map((o) => o.id));
     const missingReceiptOrderIds = pendingReceiptOrderIds.filter((id) => !loadedOrderIds.has(id));
     if (missingReceiptOrderIds.length) {

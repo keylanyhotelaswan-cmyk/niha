@@ -13,7 +13,7 @@
     "build": "node -e \"console.log('desktop shell — run npm run build:desktop from repo root')\"",
     "pack": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --win --config electron-builder.config.cjs --publish never",
     "pack:dir": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --win dir --config electron-builder.config.cjs",
-    "publish:win": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --win --config electron-builder.config.cjs --publish always"
+    "publish:win": "node ../../scripts/publish-desktop-win.mjs"
   },
   "dependencies": {
     "electron-updater": "^6.8.9"

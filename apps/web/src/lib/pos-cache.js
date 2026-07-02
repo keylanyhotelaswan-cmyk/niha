@@ -1,4 +1,5 @@
 const POS_CONTEXT_KEY = 'niha-pos-context-v1';
+const POS_SESSION_KEY = 'niha-pos-session-v1';
 const POS_CATALOG_KEY = 'niha-pos-catalog-v1';
 export function readPosContextCache() {
     try {
@@ -15,6 +16,36 @@ export function writePosContextCache(data) {
     }
     catch {
         /* ignore */
+    }
+}
+export function readPosSessionCache() {
+    try {
+        const raw = sessionStorage.getItem(POS_SESSION_KEY);
+        return raw ? JSON.parse(raw) : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
+export function writePosSessionCache(data) {
+    try {
+        sessionStorage.setItem(POS_SESSION_KEY, JSON.stringify({ ...data, _cachedAt: Date.now() }));
+        writePosContextCache(data);
+    }
+    catch {
+        /* ignore */
+    }
+}
+export function readPosSessionCacheUpdatedAt() {
+    try {
+        const raw = sessionStorage.getItem(POS_SESSION_KEY);
+        if (!raw)
+            return undefined;
+        const parsed = JSON.parse(raw);
+        return typeof parsed._cachedAt === 'number' ? parsed._cachedAt : undefined;
+    }
+    catch {
+        return undefined;
     }
 }
 export function readPosCatalogCache(branchId) {

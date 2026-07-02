@@ -1,6 +1,6 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
 import { Alert, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, Fab, MenuItem, Snackbar, Stack, TextField, Typography, useMediaQuery, useTheme, } from '@mui/material';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { buildReceiptFromSavedOrder } from '../../lib/pos-receipt.js';
@@ -8,20 +8,16 @@ import { enqueuePosPrint, preloadPosPrintPipeline } from '../../lib/pos-print-qu
 import { fetchOrderDetailForPos } from '../../lib/pos-order-detail.js';
 import { isPrintBridgeOnline } from '../../lib/pos-print-bridge.js';
 import { getReceiptSettings } from '../../lib/pos-receipt-settings.js';
+import { markPosPerf } from '../../lib/pos-perf.js';
 import { OrderAuditDialog } from './components/order-audit-dialog.js';
 import { OrderSummaryDialog } from './components/order-summary-dialog.js';
 import { apiCancelClosedOrder, apiPendingCashHandoff, apiRequestCancelOrder, apiUncollectOrder, apiWithdrawCancelRequest } from '../../lib/api.js';
 import { parseApiErrorBody } from '../../lib/api-client.js';
 import { patchShiftOrderRemoved, patchShiftOrderUncollected } from '../../lib/hooks.js';
-import { ShiftCloseDialog } from '../treasury-workspace/components/shift-close-dialog.js';
-import { ShiftSummaryPreviewDialog } from '../treasury-workspace/components/shift-summary-preview-dialog.js';
 import { formatShiftDuration, formatShiftMoney, formatShiftOpenedAt } from '../../lib/shift-summary-utils.js';
 import { ALL_CATEGORIES } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
-import { OrderModal } from './components/order-modal.js';
 import { PosKpiGrid } from './components/pos-kpi-grid.js';
-import { ProductionPlanDialog } from './components/production-plan-dialog.js';
-import { PrintSetupDialog } from './components/print-setup-dialog.js';
 import { ShiftOrdersSection } from './components/shift-orders-section.js';
 import { SuspendedSection } from './components/suspended-section.js';
 import { usePosCatalog } from './use-pos-catalog.js';
@@ -33,6 +29,11 @@ import { useAuth } from '../../lib/auth-context.js';
 import { canManagePosPrinting, hasPermission } from '../../lib/permissions.js';
 import { useDesktopUpdate } from '../../hooks/use-desktop-update.js';
 import { useDesktopVersion } from '../../hooks/use-desktop-version.js';
+const ProductionPlanDialog = lazy(() => import('./components/production-plan-dialog.js').then((m) => ({ default: m.ProductionPlanDialog })));
+const PrintSetupDialog = lazy(() => import('./components/print-setup-dialog.js').then((m) => ({ default: m.PrintSetupDialog })));
+const ShiftCloseDialog = lazy(() => import('../treasury-workspace/components/shift-close-dialog.js').then((m) => ({ default: m.ShiftCloseDialog })));
+const ShiftSummaryPreviewDialog = lazy(() => import('../treasury-workspace/components/shift-summary-preview-dialog.js').then((m) => ({ default: m.ShiftSummaryPreviewDialog })));
+const LazyOrderModal = lazy(() => import('./components/order-modal.js').then((m) => ({ default: m.OrderModal })));
 export function PosPage() {
     const theme = useTheme();
     const navigate = useNavigate();
@@ -45,7 +46,9 @@ export function PosPage() {
     const canUsePrint = workspace.printingEnabled;
     const canTreasury = hasPermission(permissions, 'shifts.access');
     const canOpenShiftWorkspace = canTreasury || hasPermission(permissions, 'pos.use');
-    const catalog = usePosCatalog(workspace.effectiveBranchId, workspace.accessToken);
+    const catalog = usePosCatalog(workspace.effectiveBranchId, workspace.accessToken, {
+        skipFetch: workspace.catalogFromSession,
+    });
     const [snack, setSnack] = useState('');
     const [snackSeverity, setSnackSeverity] = useState('success');
     const productPlanMap = useMemo(() => {
@@ -105,16 +108,37 @@ export function PosPage() {
     const [summaryOrder, setSummaryOrder] = useState(null);
     const [summaryPreviewOpen, setSummaryPreviewOpen] = useState(false);
     const deliveryDrivers = getReceiptSettings().deliveryDrivers;
+    useEffect(() => {
+        markPosPerf('mounted');
+    }, []);
+    useEffect(() => {
+        if (!workspace.shiftStatusPending) {
+            markPosPerf('interactive');
+        }
+    }, [workspace.shiftStatusPending]);
     const { data: stockItems = [] } = usePosExpenseStock(workspace.effectiveBranchId, expenseOpen && expenseKind === 'ITEM');
     const transferAvailable = useMemo(() => {
         const net = workspace.displayPosSummary?.netSalesByMethod?.[transferFrom];
         return net?.total ?? 0;
     }, [workspace.displayPosSummary, transferFrom]);
     useEffect(() => {
-        if (workspace.shiftOpen && canUsePrint) {
+        if (!workspace.shiftOpen || !canUsePrint)
+            return;
+        const run = () => {
             preloadPosPrintPipeline();
             void isPrintBridgeOnline();
-        }
+        };
+        const idleId = typeof requestIdleCallback !== 'undefined'
+            ? requestIdleCallback(run, { timeout: 2500 })
+            : window.setTimeout(run, 2000);
+        return () => {
+            if (typeof cancelIdleCallback !== 'undefined' && typeof idleId === 'number') {
+                cancelIdleCallback(idleId);
+            }
+            else {
+                clearTimeout(idleId);
+            }
+        };
     }, [workspace.shiftOpen, canUsePrint]);
     useEffect(() => {
         if (!shiftOpenDialog || !workspace.accessToken || !workspace.resolvedCashBoxId) {
@@ -129,7 +153,7 @@ export function PosPage() {
                     fromShiftNumber: res.data.fromShiftNumber,
                     uncollectedCount: res.data.uncollectedCount,
                 });
-                setOpeningFloat(String(res.data.cashAmount));
+                setOpeningFloat('0');
             }
             else {
                 setPendingCashHandoff(null);
@@ -138,7 +162,9 @@ export function PosPage() {
     }, [shiftOpenDialog, workspace.accessToken, workspace.resolvedCashBoxId]);
     const cartQtyMap = useMemo(() => {
         const m = new Map();
-        order.cartItems.forEach((i) => m.set(i.productId, i.quantity));
+        order.cartItems.forEach((i) => {
+            m.set(i.productId, (m.get(i.productId) ?? 0) + i.quantity);
+        });
         return m;
     }, [order.cartItems]);
     const notify = (msg) => {
@@ -347,8 +373,8 @@ export function PosPage() {
         : workspace.shiftOpen
             ? 'وردية مفتوحة'
             : 'وردية مغلقة';
-    return (_jsxs(Stack, { spacing: 2.5, children: [_jsx(Snackbar, { open: Boolean(snack), autoHideDuration: 5000, onClose: () => setSnack(''), anchorOrigin: { vertical: 'bottom', horizontal: 'center' }, children: _jsx(Alert, { severity: snackSeverity, variant: "filled", onClose: () => setSnack(''), sx: { width: '100%', maxWidth: 480 }, children: snack }) }), shiftKnown && !workspace.shiftOpen && workspace.contextReady ? (_jsx(Alert, { severity: "warning", sx: { borderRadius: 3 }, action: _jsx(Button, { color: "inherit", size: "small", onClick: () => setShiftOpenDialog(true), children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), children: "\u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0633\u062C\u064A\u0644 \u0637\u0644\u0628\u0627\u062A \u0623\u0648 \u0645\u0635\u0631\u0648\u0641\u0627\u062A \u062D\u062A\u0649 \u062A\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629." })) : null, workspace.posContextError ? (_jsx(Alert, { severity: "error", sx: { borderRadius: 3 }, action: _jsx(Button, { size: "small", onClick: () => workspace.refetchPosContext(), children: "\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629" }), children: workspace.posContextErrorDetail?.message ?? 'فشل تحميل سياق نقطة البيع' })) : null, _jsx(PageToolbar, { title: "\u0646\u0642\u0637\u0629 \u0627\u0644\u0628\u064A\u0639", subtitle: shiftStatusText, meta: _jsxs(Stack, { direction: "row", spacing: 1, alignItems: "center", flexWrap: "wrap", useFlexGap: true, sx: { mt: 1 }, children: [window.electronAPI?.isDesktop ? (_jsx(Chip, { label: desktopVersion ? `Desktop v${desktopVersion}` : 'Desktop', size: "small", variant: "outlined" })) : null, desktopUpdateLabel ? _jsx(Chip, { label: desktopUpdateLabel, size: "small", variant: "outlined" }) : null, _jsx(Chip, { label: shiftChipLabel, size: "small", variant: "outlined" }), _jsxs(Typography, { variant: "caption", color: "text.secondary", children: [workspace.posContext?.branch?.name ?? '—', " \u00B7 ", workspace.posContext?.cashBox?.name ?? '—'] })] }), actions: _jsxs(_Fragment, { children: [canUsePrint ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => setPrintSetupOpen(true), children: "\u0637\u0627\u0628\u0639\u0629" })) : null, canManagePrint ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => navigate('/settings/receipt'), children: "\u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629" })) : null, canOpenShiftWorkspace && workspace.shiftOpen ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => navigate('/shifts'), children: canManagePrint ? 'الخزنة' : 'ورديتي' })) : null, workspace.shiftOpen && workspace.displayPosSummary ? (_jsx(Button, { variant: "outlined", size: "small", onClick: openShiftSummaryPreview, children: "\u0645\u0644\u062E\u0635 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" })) : null, canManagePrint ? (_jsxs(Button, { variant: "outlined", size: "small", onClick: () => order.toggleAutoPrint(!order.autoPrint), children: ["\u0637\u0628\u0627\u0639\u0629: ", order.autoPrint ? 'مفعّلة' : 'معطّلة'] })) : null, workspace.shiftOpen ? (_jsxs(_Fragment, { children: [_jsx(Button, { variant: "outlined", size: "small", onClick: () => setProductionPlanOpen(true), children: "\u062E\u0637\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setExpenseOpen(true), children: "\u0645\u0635\u0631\u0648\u0641" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setTransferOpen(true), children: "\u062A\u062D\u0648\u064A\u0644" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setShiftCloseDialog(true), children: (workspace.uncollectedOrders?.length ?? 0) + (workspace.posSummary?.suspendedCount ?? 0) > 0 ? 'تسليم وردية' : 'إغلاق وردية' })] })) : (_jsx(Button, { variant: "contained", size: "small", onClick: () => setShiftOpenDialog(true), children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" })), _jsx(Button, { variant: "contained", size: "medium", disabled: !shiftLikelyOpen, onClick: () => { if (ensureShift())
-                                order.openNewOrder(); }, children: "+ \u0637\u0644\u0628 \u062C\u062F\u064A\u062F" })] }) }), _jsx(PosKpiGrid, { shiftOpen: workspace.shiftOpen, posSummary: workspace.displayPosSummary, uncollectedCount: workspace.displayUncollectedCount, uncollectedAmount: workspace.displayUncollectedAmount, suspendedCount: workspace.suspendedOrders.length, shiftNumber: workspace.shift?.shiftNumber, cashierName: workspace.shiftOperatorName, openedAt: workspace.shift?.openedAt, onOpenSummaryPreview: openShiftSummaryPreview }), _jsx(SuspendedSection, { orders: workspace.suspendedOrders, loading: workspace.suspendedPending, onResume: async (o) => {
+    return (_jsxs(Stack, { spacing: 2.5, children: [_jsx(Snackbar, { open: Boolean(snack), autoHideDuration: 5000, onClose: () => setSnack(''), anchorOrigin: { vertical: 'bottom', horizontal: 'center' }, children: _jsx(Alert, { severity: snackSeverity, variant: "filled", onClose: () => setSnack(''), sx: { width: '100%', maxWidth: 480 }, children: snack }) }), shiftKnown && !workspace.shiftOpen && workspace.contextReady ? (_jsx(Alert, { severity: "warning", sx: { borderRadius: 3 }, action: _jsx(Button, { color: "inherit", size: "small", onClick: () => setShiftOpenDialog(true), children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), children: "\u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0645\u063A\u0644\u0642\u0629 \u2014 \u0644\u0627 \u064A\u0645\u0643\u0646 \u062A\u0633\u062C\u064A\u0644 \u0637\u0644\u0628\u0627\u062A \u0623\u0648 \u0645\u0635\u0631\u0648\u0641\u0627\u062A \u062D\u062A\u0649 \u062A\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629." })) : null, workspace.posContextError ? (_jsx(Alert, { severity: "error", sx: { borderRadius: 3 }, action: _jsx(Button, { size: "small", onClick: () => workspace.refetchPosContext(), children: "\u0625\u0639\u0627\u062F\u0629 \u0627\u0644\u0645\u062D\u0627\u0648\u0644\u0629" }), children: workspace.posContextErrorDetail?.message ?? 'فشل تحميل سياق نقطة البيع' })) : null, _jsx(PageToolbar, { title: "\u0646\u0642\u0637\u0629 \u0627\u0644\u0628\u064A\u0639", subtitle: shiftStatusText, meta: _jsxs(Stack, { direction: "row", spacing: 1, alignItems: "center", flexWrap: "wrap", useFlexGap: true, sx: { mt: 1 }, children: [window.electronAPI?.isDesktop ? (_jsx(Chip, { label: desktopVersion ? `Desktop v${desktopVersion}` : 'Desktop', size: "small", variant: "outlined" })) : null, desktopUpdateLabel ? _jsx(Chip, { label: desktopUpdateLabel, size: "small", variant: "outlined" }) : null, _jsx(Chip, { label: shiftChipLabel, size: "small", variant: "outlined" }), workspace.sessionBackgroundSyncing ? (_jsx(Chip, { label: "\u062A\u062D\u062F\u064A\u062B \u0641\u064A \u0627\u0644\u062E\u0644\u0641\u064A\u0629\u2026", size: "small", color: "info", variant: "outlined" })) : null, _jsxs(Typography, { variant: "caption", color: "text.secondary", children: [workspace.posContext?.branch?.name ?? '—', " \u00B7 ", workspace.posContext?.cashBox?.name ?? '—'] })] }), actions: _jsxs(_Fragment, { children: [canUsePrint ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => setPrintSetupOpen(true), children: "\u0637\u0627\u0628\u0639\u0629" })) : null, canManagePrint ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => navigate('/settings/receipt'), children: "\u0627\u0644\u0641\u0627\u062A\u0648\u0631\u0629" })) : null, canOpenShiftWorkspace && workspace.shiftOpen ? (_jsx(Button, { variant: "outlined", size: "small", onClick: () => navigate('/shifts'), children: canManagePrint ? 'الخزنة' : 'ورديتي' })) : null, workspace.shiftOpen && workspace.displayPosSummary ? (_jsx(Button, { variant: "outlined", size: "small", onClick: openShiftSummaryPreview, children: "\u0645\u0644\u062E\u0635 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" })) : null, canManagePrint ? (_jsxs(Button, { variant: "outlined", size: "small", onClick: () => order.toggleAutoPrint(!order.autoPrint), children: ["\u0637\u0628\u0627\u0639\u0629: ", order.autoPrint ? 'مفعّلة' : 'معطّلة'] })) : null, workspace.shiftOpen ? (_jsxs(_Fragment, { children: [_jsx(Button, { variant: "outlined", size: "small", onClick: () => setProductionPlanOpen(true), children: "\u062E\u0637\u0629 \u0627\u0644\u0625\u0646\u062A\u0627\u062C" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setExpenseOpen(true), children: "\u0645\u0635\u0631\u0648\u0641" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setTransferOpen(true), children: "\u062A\u062D\u0648\u064A\u0644" }), _jsx(Button, { variant: "outlined", size: "small", onClick: () => setShiftCloseDialog(true), children: (workspace.uncollectedOrders?.length ?? 0) + (workspace.posSummary?.suspendedCount ?? 0) > 0 ? 'تسليم وردية' : 'إغلاق وردية' })] })) : (_jsx(Button, { variant: "contained", size: "small", onClick: () => setShiftOpenDialog(true), children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" })), _jsx(Button, { variant: "contained", size: "medium", disabled: !shiftLikelyOpen, onClick: () => { if (ensureShift())
+                                order.openNewOrder(); }, children: "+ \u0637\u0644\u0628 \u062C\u062F\u064A\u062F" })] }) }), _jsx(PosKpiGrid, { shiftOpen: workspace.shiftOpen, posSummary: workspace.displayPosSummary, uncollectedCount: workspace.displayUncollectedCount, uncollectedAmount: workspace.displayUncollectedAmount, suspendedCount: workspace.displaySuspendedCount, shiftNumber: workspace.shift?.shiftNumber, cashierName: workspace.shiftOperatorName, openedAt: workspace.shift?.openedAt, onOpenSummaryPreview: openShiftSummaryPreview }), _jsx(SuspendedSection, { orders: workspace.suspendedOrders, loading: workspace.suspendedPending, totalCount: workspace.displaySuspendedCount, onResume: async (o) => {
                     const res = await order.resumeSuspended(o);
                     if (res.ok)
                         notify(`تم استرجاع ${o.code}`);
@@ -373,34 +399,34 @@ export function PosPage() {
                     }
                     order.openEditOrder(o);
                 }, onUncollect: handleUncollect, onCancel: handleCancel, onRequestCancel: handleRequestCancel, onWithdrawCancel: handleWithdrawCancel, pendingOrderId: pendingOrderId, hasMoreCollected: workspace.hasMoreCollected, collectedLoadingMore: workspace.collectedLoadingMore, onLoadMoreCollected: () => workspace.fetchNextCollectedPage?.(), hasMoreUncollected: workspace.hasMoreUncollected, uncollectedLoadingMore: workspace.uncollectedLoadingMore, onLoadMoreUncollected: () => workspace.fetchNextUncollectedPage?.(), totalUncollectedCount: workspace.displayUncollectedCount, totalCollectedCount: workspace.displayCollectedCount }), _jsx(Fab, { color: "primary", variant: "extended", disabled: !shiftLikelyOpen, onClick: () => { if (ensureShift())
-                    order.openNewOrder(); }, sx: { position: 'fixed', bottom: 24, left: 24, fontWeight: 800, zIndex: 10 }, children: "+ \u0637\u0644\u0628 \u062C\u062F\u064A\u062F" }), _jsx(OrderModal, { open: order.modalOpen, mode: order.editMode ? 'edit' : 'create', editBaselineQty: order.editBaselineQty, fullScreen: fullScreenModal, branchId: workspace.effectiveBranchId, operatorName: workspace.operatorName, orderType: order.orderType, currentOrderCode: order.currentOrderCode, collectionStatus: order.collectionStatus, productSearch: order.productSearch, onProductSearch: order.setProductSearch, orderOwnerName: order.orderOwnerName, onOrderOwnerName: order.setOrderOwnerName, customerPhone: order.customerPhone, onCustomerPhone: order.setCustomerPhone, onSelectCustomer: order.applyCustomerSuggestion, customerAddress: order.customerAddress, onCustomerAddress: order.setCustomerAddress, captainName: order.captainName, onCaptainName: order.setCaptainName, onOrderTypeChange: order.setOrderTypeAndDefaults, categories: catalog.categories, activeCategory: catalog.activeCategory, onCategoryChange: catalog.setActiveCategory, allCategoriesKey: ALL_CATEGORIES, products: catalog.products, catalogPending: catalog.catalogPending, cartItems: order.cartItems, cartQtyMap: cartQtyMap, onAddProduct: order.addProduct, onUpdateQty: order.updateQuantity, onUpdateUnitPrice: order.updateUnitPrice, onUpdateNote: order.updateNote, onAddCustomLine: order.addCustomLine, customLineProductId: catalog.customLineProductId, paymentMethods: catalog.paymentMethods, paymentMethod: order.paymentMethod, onPaymentMethod: order.setPaymentMethod, onCollectionStatus: order.setCollectionStatus, discountAmount: order.discountAmount, onDiscountAmount: order.setDiscountAmount, orderNote: order.orderNote, onOrderNote: order.setOrderNote, sauces: catalog.sauces, paidSauceProductIds: catalog.paidSauceProductIds, onToggleItemSauce: order.toggleItemSauce, subtotal: order.subtotal, discount: order.discount, total: order.total, onClose: () => order.closeModal(), deliveryDrivers: deliveryDrivers, validateTakeawayCustomer: order.validateTakeawayCustomer, onSuspend: async () => {
-                    const res = await order.suspendOrder();
-                    if (res?.ok)
-                        notify('تم تعليق الطلب.');
-                    if (!res?.ok) {
-                        const err = res?.error ?? res?.body;
-                        return { ok: false, ...(err ? { error: err } : {}) };
-                    }
-                    return { ok: true };
-                }, onCloseOrder: () => { void order.closeOrder(); }, onSaveEdit: async () => {
-                    const res = await order.saveEditedOrder();
-                    if (res.ok)
-                        notify(`تم حفظ تعديلات الطلب.`);
-                    else
-                        notify(parseApiErrorBody(res.error, 'فشل حفظ التعديل'));
-                    return res;
-                }, onClearCart: () => { order.resetOrder(); notify('تم إفراغ السلة.'); } }), auditOrder ? (_jsx(OrderAuditDialog, { open: Boolean(auditOrder), orderId: auditOrder.id, orderCode: auditOrder.code, onClose: () => setAuditOrder(null) })) : null, _jsx(OrderSummaryDialog, { open: Boolean(summaryOrder), order: summaryOrder, ...(() => {
+                    order.openNewOrder(); }, sx: { position: 'fixed', bottom: 24, left: 24, fontWeight: 800, zIndex: 10 }, children: "+ \u0637\u0644\u0628 \u062C\u062F\u064A\u062F" }), order.modalOpen ? (_jsx(Suspense, { fallback: null, children: _jsx(LazyOrderModal, { open: order.modalOpen, mode: order.editMode ? 'edit' : 'create', editBaselineQty: order.editBaselineQty, fullScreen: fullScreenModal, branchId: workspace.effectiveBranchId, operatorName: workspace.operatorName, orderType: order.orderType, currentOrderCode: order.currentOrderCode, collectionStatus: order.collectionStatus, productSearch: order.productSearch, onProductSearch: order.setProductSearch, orderOwnerName: order.orderOwnerName, onOrderOwnerName: order.setOrderOwnerName, customerPhone: order.customerPhone, onCustomerPhone: order.setCustomerPhone, onSelectCustomer: order.applyCustomerSuggestion, customerAddress: order.customerAddress, onCustomerAddress: order.setCustomerAddress, captainName: order.captainName, onCaptainName: order.setCaptainName, onOrderTypeChange: order.setOrderTypeAndDefaults, categories: catalog.categories, activeCategory: catalog.activeCategory, onCategoryChange: catalog.setActiveCategory, allCategoriesKey: ALL_CATEGORIES, products: catalog.products, catalogPending: catalog.catalogPending, cartItems: order.cartItems, cartQtyMap: cartQtyMap, onAddProduct: order.addProduct, onUpdateQty: order.updateQuantity, onUpdateUnitPrice: order.updateUnitPrice, onUpdateNote: order.updateNote, onAddCustomLine: order.addCustomLine, customLineProductId: catalog.customLineProductId, paymentMethods: catalog.paymentMethods, paymentMethod: order.paymentMethod, onPaymentMethod: order.setPaymentMethod, onCollectionStatus: order.setCollectionStatus, discountAmount: order.discountAmount, onDiscountAmount: order.setDiscountAmount, orderNote: order.orderNote, onOrderNote: order.setOrderNote, sauces: catalog.sauces, paidSauceProductIds: catalog.paidSauceProductIds, onToggleItemSauce: order.toggleItemSauce, subtotal: order.subtotal, discount: order.discount, total: order.total, onClose: () => order.closeModal(), deliveryDrivers: deliveryDrivers, validateTakeawayCustomer: order.validateTakeawayCustomer, onSuspend: async () => {
+                        const res = await order.suspendOrder();
+                        if (res?.ok)
+                            notify('تم تعليق الطلب.');
+                        if (!res?.ok) {
+                            const err = res?.error ?? res?.body;
+                            return { ok: false, ...(err ? { error: err } : {}) };
+                        }
+                        return { ok: true };
+                    }, onCloseOrder: () => { void order.closeOrder(); }, onSaveEdit: async () => {
+                        const res = await order.saveEditedOrder();
+                        if (res.ok)
+                            notify(`تم حفظ تعديلات الطلب.`);
+                        else
+                            notify(parseApiErrorBody(res.error, 'فشل حفظ التعديل'));
+                        return res;
+                    }, onClearCart: () => { order.resetOrder(); notify('تم إفراغ السلة.'); } }) })) : null, auditOrder ? (_jsx(OrderAuditDialog, { open: Boolean(auditOrder), orderId: auditOrder.id, orderCode: auditOrder.code, onClose: () => setAuditOrder(null) })) : null, _jsx(OrderSummaryDialog, { open: Boolean(summaryOrder), order: summaryOrder, ...(() => {
                     if (!summaryOrder)
                         return {};
                     const label = catalog.paymentMethods.find((m) => m.id === summaryOrder.paymentMethod)?.label;
                     return label ? { paymentMethodLabel: label } : {};
-                })(), onClose: () => setSummaryOrder(null) }), _jsx(ProductionPlanDialog, { open: productionPlanOpen, branchId: workspace.effectiveBranchId, accessToken: workspace.accessToken, onClose: () => setProductionPlanOpen(false), onSaved: () => {
-                    notify('تم حفظ خطة الإنتاج.');
-                    void catalog.reload();
-                } }), _jsxs(Dialog, { open: collectOpen, onClose: () => { if (!collectBusy) {
+                })(), onClose: () => setSummaryOrder(null) }), productionPlanOpen ? (_jsx(Suspense, { fallback: null, children: _jsx(ProductionPlanDialog, { open: productionPlanOpen, branchId: workspace.effectiveBranchId, accessToken: workspace.accessToken, onClose: () => setProductionPlanOpen(false), onSaved: () => {
+                        notify('تم حفظ خطة الإنتاج.');
+                        void catalog.reload();
+                    } }) })) : null, _jsxs(Dialog, { open: collectOpen, onClose: () => { if (!collectBusy) {
                     setCollectOpen(false);
                     setCollectError('');
-                } }, fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u062A\u062D\u0635\u064A\u0644 \u0641\u064A \u0627\u0644\u062F\u0631\u062C" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [collectError ? _jsx(Alert, { severity: "error", children: collectError }) : null, collectBusy ? _jsx(Alert, { severity: "info", children: "\u062C\u0627\u0631\u064A \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062A\u062D\u0635\u064A\u0644\u2026" }) : null, _jsx(TextField, { label: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628", value: collectOrder?.code ?? '', InputProps: { readOnly: true } }), _jsx(TextField, { label: "\u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A", value: collectOrder ? formatCurrency(collectOrder.total) : '', InputProps: { readOnly: true } }), _jsx(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: collectPayment, onChange: (e) => setCollectPayment(e.target.value), children: catalog.paymentMethods.map((m) => _jsx(MenuItem, { value: m.id, children: m.label }, m.id)) })] }) }), _jsxs(DialogActions, { sx: { flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }, children: [_jsx(Button, { onClick: () => { setCollectOpen(false); setCollectError(''); }, disabled: collectBusy, children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "outlined", disabled: collectBusy, onClick: () => void runCollect(false), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل فقط' }), canUsePrint ? (_jsx(Button, { variant: "contained", disabled: collectBusy, onClick: () => void runCollect(true), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل وطباعة' })) : null] })] }), canUsePrint ? (_jsx(PrintSetupDialog, { open: printSetupOpen, onClose: () => setPrintSetupOpen(false) })) : null, _jsxs(Dialog, { open: expenseOpen, onClose: () => setExpenseOpen(false), fullWidth: true, maxWidth: "sm", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u0645\u0635\u0631\u0648\u0641 \u0645\u0646 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Alert, { severity: "info", sx: { borderRadius: 2 }, children: "\u064A\u064F\u062E\u0635\u0645 \u0645\u0646 \u062D\u0633\u0627\u0628 \u0627\u0644\u062F\u0641\u0639 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 (\u0646\u0642\u062F\u064A \u0645\u0646 \u0627\u0644\u062F\u0631\u062C\u060C \u0623\u0648 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A/\u0645\u062D\u0641\u0638\u0629 \u0645\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0648\u0631\u062F\u064A\u0629)." }), _jsxs(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: expensePaymentMethod, onChange: (e) => setExpensePaymentMethod(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(TextField, { select: true, label: "\u0646\u0648\u0639 \u0627\u0644\u0645\u0635\u0631\u0648\u0641", value: expenseKind, onChange: (e) => setExpenseKind(e.target.value), children: [_jsx(MenuItem, { value: "GENERAL", children: "\u0645\u0635\u0631\u0648\u0641 \u0639\u0627\u0645" }), _jsx(MenuItem, { value: "ITEM", children: "\u0634\u0631\u0627\u0621 \u062E\u0627\u0645\u0627\u062A" })] }), expenseKind === 'ITEM' ? (_jsxs(_Fragment, { children: [_jsx(TextField, { select: true, label: "\u0627\u0644\u0635\u0646\u0641", value: expenseStockItemId, onChange: (e) => {
+                } }, fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u062A\u062D\u0635\u064A\u0644 \u0641\u064A \u0627\u0644\u062F\u0631\u062C" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [collectError ? _jsx(Alert, { severity: "error", children: collectError }) : null, collectBusy ? _jsx(Alert, { severity: "info", children: "\u062C\u0627\u0631\u064A \u062A\u0633\u062C\u064A\u0644 \u0627\u0644\u062A\u062D\u0635\u064A\u0644\u2026" }) : null, _jsx(TextField, { label: "\u0631\u0642\u0645 \u0627\u0644\u0637\u0644\u0628", value: collectOrder?.code ?? '', InputProps: { readOnly: true } }), _jsx(TextField, { label: "\u0627\u0644\u0625\u062C\u0645\u0627\u0644\u064A", value: collectOrder ? formatCurrency(collectOrder.total) : '', InputProps: { readOnly: true } }), _jsx(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: collectPayment, onChange: (e) => setCollectPayment(e.target.value), children: catalog.paymentMethods.map((m) => _jsx(MenuItem, { value: m.id, children: m.label }, m.id)) })] }) }), _jsxs(DialogActions, { sx: { flexWrap: 'wrap', gap: 1, px: 2, pb: 2 }, children: [_jsx(Button, { onClick: () => { setCollectOpen(false); setCollectError(''); }, disabled: collectBusy, children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "outlined", disabled: collectBusy, onClick: () => void runCollect(false), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل فقط' }), canUsePrint ? (_jsx(Button, { variant: "contained", disabled: collectBusy, onClick: () => void runCollect(true), children: collectBusy ? 'جاري التحصيل…' : 'تحصيل وطباعة' })) : null] })] }), canUsePrint && printSetupOpen ? (_jsx(Suspense, { fallback: null, children: _jsx(PrintSetupDialog, { open: printSetupOpen, onClose: () => setPrintSetupOpen(false) }) })) : null, _jsxs(Dialog, { open: expenseOpen, onClose: () => setExpenseOpen(false), fullWidth: true, maxWidth: "sm", children: [_jsx(DialogTitle, { children: "\u062A\u0633\u062C\u064A\u0644 \u0645\u0635\u0631\u0648\u0641 \u0645\u0646 \u0627\u0644\u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Alert, { severity: "info", sx: { borderRadius: 2 }, children: "\u064A\u064F\u062E\u0635\u0645 \u0645\u0646 \u062D\u0633\u0627\u0628 \u0627\u0644\u062F\u0641\u0639 \u0627\u0644\u0645\u062E\u062A\u0627\u0631 (\u0646\u0642\u062F\u064A \u0645\u0646 \u0627\u0644\u062F\u0631\u062C\u060C \u0623\u0648 \u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A/\u0645\u062D\u0641\u0638\u0629 \u0645\u0646 \u0631\u0635\u064A\u062F \u0627\u0644\u0648\u0631\u062F\u064A\u0629)." }), _jsxs(TextField, { select: true, label: "\u0637\u0631\u064A\u0642\u0629 \u0627\u0644\u062F\u0641\u0639", value: expensePaymentMethod, onChange: (e) => setExpensePaymentMethod(e.target.value), children: [_jsx(MenuItem, { value: "CASH", children: "\u0646\u0642\u062F\u064A (\u0627\u0644\u062F\u0631\u062C)" }), _jsx(MenuItem, { value: "INSTAPAY", children: "\u0627\u0646\u0633\u062A\u0627\u0628\u0627\u064A" }), _jsx(MenuItem, { value: "WALLET", children: "\u0645\u062D\u0641\u0638\u0629" })] }), _jsxs(TextField, { select: true, label: "\u0646\u0648\u0639 \u0627\u0644\u0645\u0635\u0631\u0648\u0641", value: expenseKind, onChange: (e) => setExpenseKind(e.target.value), children: [_jsx(MenuItem, { value: "GENERAL", children: "\u0645\u0635\u0631\u0648\u0641 \u0639\u0627\u0645" }), _jsx(MenuItem, { value: "ITEM", children: "\u0634\u0631\u0627\u0621 \u062E\u0627\u0645\u0627\u062A" })] }), expenseKind === 'ITEM' ? (_jsxs(_Fragment, { children: [_jsx(TextField, { select: true, label: "\u0627\u0644\u0635\u0646\u0641", value: expenseStockItemId, onChange: (e) => {
                                                 const id = e.target.value;
                                                 setExpenseStockItemId(id);
                                                 const item = stockItems.find((s) => s.id === id);
@@ -451,7 +477,14 @@ export function PosPage() {
                                     }
                                 }, children: "\u062A\u062D\u0648\u064A\u0644" })] })] }), _jsxs(Dialog, { open: shiftOpenDialog, onClose: () => setShiftOpenDialog(false), fullWidth: true, maxWidth: "xs", children: [_jsx(DialogTitle, { children: "\u0641\u062A\u062D \u0648\u0631\u062F\u064A\u0629" }), _jsx(DialogContent, { children: _jsxs(Stack, { spacing: 2, sx: { pt: 1 }, children: [_jsx(Typography, { variant: "body2", color: "text.secondary", children: "\u0627\u0641\u062A\u062D \u0627\u0644\u0648\u0631\u062F\u064A\u0629 \u0642\u0628\u0644 \u0627\u0644\u0628\u064A\u0639. \u0627\u0644\u0637\u0644\u0628\u0627\u062A \u063A\u064A\u0631 \u0627\u0644\u0645\u062D\u0635\u0651\u0644\u0629 \u0639\u0644\u0649 \u0627\u0644\u062E\u0632\u0646\u0629 \u062A\u0628\u0642\u0649 \u0643\u062A\u0630\u0643\u064A\u0631." }), pendingCashHandoff ? (_jsxs(Alert, { severity: "info", children: [pendingCashHandoff.handedByName ?? 'الكاشير السابق', " \u0633\u0644\u0651\u0645\u0643", ' ', Number(pendingCashHandoff.cashAmount).toLocaleString('en-US'), " \u062C.\u0645 \u0646\u0642\u062F\u064A\u0629", ' ', "(\u0645\u0646 \u0648\u0631\u062F\u064A\u0629 ", pendingCashHandoff.fromShiftNumber, ")", pendingCashHandoff.uncollectedCount
                                             ? ` · ${pendingCashHandoff.uncollectedCount} طلب غير محصّل على الخزنة`
-                                            : ''] })) : null, _jsx(TextField, { label: "\u0639\u0647\u062F\u0629 \u0627\u0644\u0641\u062A\u062D (\u0646\u0642\u062F\u064A)", type: "number", value: openingFloat, onChange: (e) => setOpeningFloat(e.target.value) })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setShiftOpenDialog(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", disabled: shiftOpening, onClick: async () => {
+                                            : ''] })) : null, _jsx(TextField, { label: pendingCashHandoff ? 'عهدة إضافية (اختياري)' : 'عهدة الفتح (نقدي)', type: "number", value: openingFloat, onChange: (e) => setOpeningFloat(e.target.value), helperText: pendingCashHandoff
+                                        ? (() => {
+                                            const handoff = Number(pendingCashHandoff.cashAmount);
+                                            const extra = Number(openingFloat) || 0;
+                                            const total = extra >= handoff ? extra : handoff + extra;
+                                            return `إجمالي الاستلام: ${total.toLocaleString('en-US')} ج.م`;
+                                        })()
+                                        : undefined })] }) }), _jsxs(DialogActions, { children: [_jsx(Button, { onClick: () => setShiftOpenDialog(false), children: "\u0625\u0644\u063A\u0627\u0621" }), _jsx(Button, { variant: "contained", disabled: shiftOpening, onClick: async () => {
                                     if (shiftOpening)
                                         return;
                                     setShiftOpening(true);
@@ -475,13 +508,13 @@ export function PosPage() {
                                     finally {
                                         setShiftOpening(false);
                                     }
-                                }, children: shiftOpening ? 'جاري الفتح…' : 'فتح' })] })] }), workspace.shift ? (_jsx(ShiftCloseDialog, { open: shiftCloseDialog, onClose: () => setShiftCloseDialog(false), shiftId: workspace.shift.id, shiftNumber: workspace.shift.shiftNumber, cashierName: workspace.shiftOperatorName, openedAt: workspace.shift.openedAt, summary: workspace.closeShiftSummary, onOpenSummaryPreview: openShiftSummaryPreview, onConfirm: async (payload) => {
-                    const res = await workspace.closeShiftSession(payload);
-                    if (!res.ok) {
-                        notify(res.error ?? 'فشل الإغلاق');
-                        throw new Error(res.error ?? 'فشل الإغلاق');
-                    }
-                    setShiftCloseDialog(false);
-                    notify(res.message ?? 'تم إغلاق الوردية.');
-                } })) : null, _jsx(ShiftSummaryPreviewDialog, { open: summaryPreviewOpen, onClose: () => setSummaryPreviewOpen(false), params: shiftSummaryPreviewParams, onMessage: notify })] }));
+                                }, children: shiftOpening ? 'جاري الفتح…' : 'فتح' })] })] }), workspace.shift && shiftCloseDialog ? (_jsx(Suspense, { fallback: null, children: _jsx(ShiftCloseDialog, { open: shiftCloseDialog, onClose: () => setShiftCloseDialog(false), shiftId: workspace.shift.id, shiftNumber: workspace.shift.shiftNumber, cashierName: workspace.shiftOperatorName, openedAt: workspace.shift.openedAt, summary: workspace.closeShiftSummary, onOpenSummaryPreview: openShiftSummaryPreview, onConfirm: async (payload) => {
+                        const res = await workspace.closeShiftSession(payload);
+                        if (!res.ok) {
+                            notify(res.error ?? 'فشل الإغلاق');
+                            throw new Error(res.error ?? 'فشل الإغلاق');
+                        }
+                        setShiftCloseDialog(false);
+                        notify(res.message ?? 'تم إغلاق الوردية.');
+                    } }) })) : null, summaryPreviewOpen && shiftSummaryPreviewParams ? (_jsx(Suspense, { fallback: null, children: _jsx(ShiftSummaryPreviewDialog, { open: summaryPreviewOpen, onClose: () => setSummaryPreviewOpen(false), params: shiftSummaryPreviewParams, onMessage: notify }) })) : null] }));
 }

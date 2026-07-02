@@ -25,7 +25,10 @@ describe('OrdersService', () => {
     getNextNumber: jest.fn().mockResolvedValue('ORDER-202606-000001'),
     getNextShiftOrderNumber: jest.fn().mockResolvedValue('1'),
   };
-  const treasuryMock = { recordSaleReceipt: jest.fn() };
+  const treasuryMock = {
+    recordSaleReceipt: jest.fn().mockResolvedValue([]),
+    invalidateReadSnapshots: jest.fn().mockResolvedValue(undefined),
+  };
   const paymentMethodsMock = { findByCode: jest.fn().mockResolvedValue({ id: 'pm-1', type: 'CASH' }) };
   const auditMock = { log: jest.fn().mockResolvedValue(undefined) };
   const customersMock = { syncFromOrder: jest.fn().mockResolvedValue(null) };

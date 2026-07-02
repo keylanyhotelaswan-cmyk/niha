@@ -3,9 +3,9 @@ import { usePosCatalog as usePosCatalogQuery } from '../../lib/hooks.js';
 import { isPaidSauceSku } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES, DEFAULT_PAYMENT_METHODS } from './constants.js';
 import { readPosBranchId } from '../../lib/pos-store.js';
-export function usePosCatalog(branchId, accessToken) {
+export function usePosCatalog(branchId, accessToken, opts) {
     const catalogBranchId = branchId || readPosBranchId();
-    const { data, isPending, isFetching, refetch } = usePosCatalogQuery(accessToken ? catalogBranchId : undefined);
+    const { data, isPending, isFetching, refetch } = usePosCatalogQuery(accessToken ? catalogBranchId : undefined, !(opts?.skipFetch));
     const [activeCategory, setActiveCategory] = useState(ALL_CATEGORIES);
     useEffect(() => {
         setActiveCategory(ALL_CATEGORIES);

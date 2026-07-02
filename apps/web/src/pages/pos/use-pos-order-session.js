@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { apiCreateOpenOrder, apiPlaceOrder, apiAmendOrder, apiResumeOrder, apiSuspendOrder, } from '../../lib/api.js';
-import { invalidatePosQueries, patchShiftOrderAdded, patchShiftOrderUpdated, POS_QUERY_KEYS, refetchPosOrderData } from '../../lib/hooks.js';
+import { invalidatePosSuspendedOrders, patchShiftOrderAdded, patchShiftOrderUpdated, POS_QUERY_KEYS, refetchPosOrderData } from '../../lib/hooks.js';
 import { enqueuePosPrint } from '../../lib/pos-print-queue.js';
 import { isAutoPrintEnabled, setAutoPrintEnabled, } from '../../lib/pos-receipt.js';
-import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, cartLineKey, } from '../../lib/pos-store.js';
+import { createOrderCode, defaultOwnerName, mapOrderTypeToApi, mapPaymentMethodCode, validateTakeawayOrderFields, cartLineKey, isMergeableCatalogCartLine, } from '../../lib/pos-store.js';
 import { itemNoteForApi } from '../../lib/pos-order-sauces.js';
 import { ALL_CATEGORIES } from './constants.js';
 import { getStoreBranding } from '../../lib/pos-receipt.js';
@@ -40,11 +40,11 @@ export function usePosOrderSession(workspace, catalog) {
             const { openOrderId: id, cartItems: items, accessToken: token } = pendingRef.current;
             if (id && items.length > 0 && token) {
                 apiSuspendOrder(id, 'تعليق تلقائي عند مغادرة نقطة البيع', token).finally(() => {
-                    invalidatePosQueries(queryClient);
+                    invalidatePosSuspendedOrders(queryClient, effectiveBranchId);
                 });
             }
         };
-    }, [queryClient]);
+    }, [queryClient, effectiveBranchId]);
     const subtotal = useMemo(() => cartItems.reduce((t, i) => t + i.unitPrice * i.quantity, 0), [cartItems]);
     const discount = Math.max(0, Number(discountAmount) || 0);
     const total = Math.max(0, subtotal - discount);
@@ -98,7 +98,6 @@ export function usePosOrderSession(workspace, catalog) {
         resetOrder('eat-in');
         setProductSearch('');
         catalog.setActiveCategory(ALL_CATEGORIES);
-        catalog.reload?.();
         setModalOpen(true);
         return true;
     };
@@ -113,8 +112,7 @@ export function usePosOrderSession(workspace, catalog) {
         if (openOrderId && cartItems.length > 0 && accessToken) {
             const res = await apiSuspendOrder(openOrderId, 'إعادة تعليق تلقائي', accessToken);
             if (res.ok) {
-                invalidatePosQueries(queryClient);
-                refetchSuspended();
+                invalidatePosSuspendedOrders(queryClient, effectiveBranchId);
             }
         }
         setOpenOrderId(null);
@@ -148,16 +146,25 @@ export function usePosOrderSession(workspace, catalog) {
     const addProduct = (product) => {
         if (!product.isAvailable)
             return;
+        const customLineProductId = catalog.customLineProductId;
         setCartItems((cur) => {
-            const prevQty = cur.find((i) => i.productId === product.id && !i.lineId)?.quantity ?? 0;
+            const matches = cur.filter((i) => isMergeableCatalogCartLine(i, product.id, customLineProductId));
+            const prevQty = matches.reduce((sum, i) => sum + i.quantity, 0);
             const nextQty = prevQty + 1;
             notifyPlanChange(product, prevQty, nextQty);
-            const ex = cur.find((i) => i.productId === product.id && !i.lineId);
-            if (ex) {
-                return cur.map((i) => (i.productId === product.id && !i.lineId ? { ...i, quantity: i.quantity + 1 } : i));
+            if (matches.length > 0) {
+                const template = matches[0];
+                const withoutDupes = cur.filter((i) => !isMergeableCatalogCartLine(i, product.id, customLineProductId));
+                return [...withoutDupes, {
+                        productId: product.id,
+                        name: template.name || product.name,
+                        unitPrice: template.unitPrice ?? product.salePrice,
+                        quantity: nextQty,
+                        note: template.note ?? '',
+                        sauces: template.sauces ?? [],
+                    }];
             }
             return [...cur, {
-                    lineId: product.id,
                     productId: product.id,
                     name: product.name,
                     unitPrice: product.salePrice,
@@ -244,8 +251,7 @@ export function usePosOrderSession(workspace, catalog) {
         if (suspendRes.ok) {
             resetOrder(orderType);
             setModalOpen(false);
-            invalidatePosQueries(queryClient);
-            refetchSuspended();
+            invalidatePosSuspendedOrders(queryClient, effectiveBranchId);
         }
         return suspendRes;
     };

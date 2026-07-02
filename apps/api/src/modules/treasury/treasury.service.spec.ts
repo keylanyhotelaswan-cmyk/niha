@@ -15,6 +15,13 @@ describe('TreasuryService safe split', () => {
     shift: {
       findUnique: jest.fn(),
     },
+    branchBalanceSnapshot: {
+      findFirst: jest.fn().mockResolvedValue(null),
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    shiftSummarySnapshot: {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
     order: {
       aggregate: jest.fn(),
     },

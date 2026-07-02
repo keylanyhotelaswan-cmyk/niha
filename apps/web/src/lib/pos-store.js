@@ -6,6 +6,15 @@ export const POS_CUSTOM_LINE_SKU = 'POS-CUSTOM';
 export function cartLineKey(item) {
     return item.lineId ?? item.productId;
 }
+/** سطر كتالوج عادي (ليس يدوي) — قابل للدمج عند تكرار الضغط على نفس الصنف */
+export function isMergeableCatalogCartLine(item, productId, customLineProductId) {
+    if (item.productId !== productId)
+        return false;
+    if (customLineProductId && item.productId === customLineProductId)
+        return false;
+    // lineId === productId كان خطأ قديماً — ندمج هذه الأسطر أيضاً
+    return !item.lineId || item.lineId === item.productId;
+}
 export function isShiftOrderUncollected(order) {
     return order.collectionStatus === 'uncollected' || order.paymentStatus === 'PENDING';
 }

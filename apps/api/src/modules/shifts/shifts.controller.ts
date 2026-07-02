@@ -64,6 +64,16 @@ export class ShiftsController {
     return this.shiftsService.getPosContext(organizationId, req.user?.id);
   }
 
+  @Get('pos-session')
+  @RequirePermissions('pos.use')
+  posSession(@Request() req: any) {
+    const organizationId = req.user?.organizationId;
+    if (!organizationId) {
+      throw new BadRequestException('Organization not found for user');
+    }
+    return this.shiftsService.getPosSession(organizationId, req.user?.id);
+  }
+
   @Get('pos-catalog')
   @RequirePermissions('pos.use')
   posCatalog(@Query('branchId') branchId: string) {

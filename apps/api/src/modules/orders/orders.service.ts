@@ -134,6 +134,12 @@ export class OrdersService {
       }).catch((err) => {
         console.error(`Treasury receipt failed for order ${orderNumber}:`, err);
       });
+    } else if (shiftId && isUncollected) {
+      void this.treasuryService.invalidateReadSnapshots({
+        branchId: dto.branchId,
+        cashBoxId,
+        shiftId,
+      }).catch(() => {});
     }
 
     void this.logOrderAudit({

@@ -191,7 +191,7 @@ function toServerReceiptPayload(settings, savedAt) {
     }
     return payload;
 }
-function mergeReceiptSettings(local, remote) {
+export function mergeReceiptSettings(local, remote) {
     return normalizeReceiptSettings({
         ...remote,
         ...pickLocalReceiptSettings(local),

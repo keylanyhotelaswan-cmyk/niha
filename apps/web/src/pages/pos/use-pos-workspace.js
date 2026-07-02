@@ -3,51 +3,91 @@ import { useEffect, useMemo, useState } from 'react';
 import { apiAutoOpenShift, apiCollectClosedOrder, apiCreateCashierExpense, apiListExpenseStockItems, apiShiftWalletTransfer } from '../../lib/api.js';
 import { apiGet } from '../../lib/api-client.js';
 import { useAuth } from '../../lib/auth-context.js';
-import { invalidatePosQueries, patchPosCachesAfterAutoOpen, patchShiftOrderCollected, patchShiftOrderUncollected, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosContext, usePosShiftSummary, useShiftCollectedOrders, useShiftUncollectedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
-import { readPosContextCache } from '../../lib/pos-cache.js';
+import { hydratePosSessionFromCache, invalidatePosQueries, patchPosCachesAfterAutoOpen, patchShiftOrderCollected, patchShiftOrderUncollected, POS_QUERY_KEYS, refetchPosOrderData, useBranches, useCashBoxes, useCurrentShift, usePosSession, usePosShiftSummary, useShiftCollectedOrders, useShiftUncollectedOrders, useShiftMutations, useSuspendedOrders, } from '../../lib/hooks.js';
+import { readPosContextCache, readPosSessionCache } from '../../lib/pos-cache.js';
+import { markPosPerf } from '../../lib/pos-perf.js';
 import { canManageTreasury, canUsePosPrinting } from '../../lib/permissions.js';
-import { hydrateReceiptSettingsFromServer, RECEIPT_SETTINGS_EVENT } from '../../lib/pos-receipt-settings.js';
+import { getReceiptSettings, mergeReceiptSettings, RECEIPT_SETTINGS_EVENT, saveReceiptSettings } from '../../lib/pos-receipt-settings.js';
 import { isShiftOrderCollected, isShiftOrderUncollected, mapApiOrderToSavedOrder, mapPaymentMethodCode, readPosBranchId, writePosBranchId, } from '../../lib/pos-store.js';
+function readCount(value) {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : undefined;
+}
+function sessionShiftIdOf(session) {
+    const id = session?.shift?.id;
+    return id != null ? String(id) : '';
+}
+function sessionHasOrderSeed(session, shiftId, field) {
+    if (!session || !shiftId)
+        return false;
+    if (sessionShiftIdOf(session) !== shiftId)
+        return false;
+    return session[field] != null;
+}
+function sessionHasSuspendedSeed(session, branchId) {
+    if (!session || !branchId)
+        return false;
+    if (session.branch?.id !== branchId)
+        return false;
+    return session.suspendedOrders != null;
+}
 export function usePosWorkspace() {
     const queryClient = useQueryClient();
     const { accessToken, user, permissions } = useAuth();
-    const { data: posContext, refetch: refetchPosContext, isPending: posContextPending, isError: posContextError, error: posContextErrorDetail, isFetching: posContextFetching } = usePosContext();
+    if (!queryClient.getQueryData(POS_QUERY_KEYS.session)) {
+        hydratePosSessionFromCache(queryClient);
+    }
+    const { data: posSession, refetch: refetchPosSession, isPending: posSessionPending, isError: posContextError, error: posContextErrorDetail, isFetching: posContextFetching, } = usePosSession();
+    const bootstrapSession = posSession ?? readPosSessionCache();
+    const posContext = bootstrapSession;
+    const sessionReady = Boolean(bootstrapSession?.branch);
     const cachedContext = readPosContextCache();
-    const cachedShiftOpen = Boolean(cachedContext?.shiftOpen);
-    const shiftStatusPending = posContextPending && !posContext;
-    const { data: branchList = [] } = useBranches();
+    const cachedShiftOpen = Boolean(cachedContext?.shiftOpen ?? bootstrapSession?.shiftOpen);
+    const shiftStatusPending = !sessionReady && posSessionPending;
+    const sessionBackgroundSyncing = Boolean(sessionReady && posContextFetching);
+    const { data: branchList = [] } = useBranches(bootstrapSession?.branch ?? null);
     const [branchId, setBranchId] = useState(() => readPosBranchId());
     const [selectedCashBoxId, setSelectedCashBoxId] = useState('');
-    const effectiveBranchId = posContext?.branch?.id || branchId || branchList[0]?.id || readPosBranchId();
-    const { data: cashBoxes = [] } = useCashBoxes(effectiveBranchId);
-    const contextCashBoxId = posContext?.cashBox?.id ?? '';
+    const effectiveBranchId = bootstrapSession?.branch?.id || branchId || branchList[0]?.id || readPosBranchId();
+    const { data: cashBoxesFetched = [] } = useCashBoxes(effectiveBranchId, !sessionReady || !bootstrapSession?.cashBoxes);
+    const cashBoxes = bootstrapSession?.cashBoxes ?? cashBoxesFetched;
+    const contextCashBoxId = bootstrapSession?.cashBox?.id ?? '';
     const queryCashBoxId = selectedCashBoxId || contextCashBoxId || cashBoxes[0]?.id || '';
-    const hasContextShift = Boolean(posContext?.shiftOpen && posContext?.shift);
-    const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, queryCashBoxId, !posContextPending && !!effectiveBranchId && !!queryCashBoxId && (!hasContextShift || !posContext?.summary));
+    const hasContextShift = Boolean(bootstrapSession?.shiftOpen && bootstrapSession?.shift);
+    const skipShiftCurrent = Boolean(bootstrapSession && (!bootstrapSession.shiftOpen || (hasContextShift && bootstrapSession.summary)));
+    const { data: shiftData, refetch: refetchShift } = useCurrentShift(effectiveBranchId, queryCashBoxId, !posSessionPending && !!effectiveBranchId && !!queryCashBoxId && !skipShiftCurrent);
     const shift = useMemo(() => {
         if (shiftData?.shiftOpen && shiftData.shift)
             return shiftData.shift;
-        if (posContext?.shiftOpen && posContext.shift)
-            return posContext.shift;
+        if (bootstrapSession?.shiftOpen && bootstrapSession.shift)
+            return bootstrapSession.shift;
         return null;
-    }, [shiftData, posContext]);
+    }, [shiftData, bootstrapSession]);
     const canManageShift = canManageTreasury(permissions);
     const shiftOwned = Boolean(shift && user?.id && shift.openedById === user.id);
     const shiftOpen = Boolean(shift && (shiftOwned || canManageShift));
-    const effectiveShiftId = shiftOpen && shift?.id ? shift.id : '';
-    const cashBoxId = shift?.cashBoxId ?? posContext?.cashBox?.id ?? selectedCashBoxId;
-    const { data: posSummaryFetched, refetch: refetchPosSummary, isPending: posSummaryPending, isError: posSummaryError } = usePosShiftSummary(effectiveShiftId || undefined, posContext?.posSummary);
-    const posSummary = posSummaryFetched ?? posContext?.posSummary ?? null;
-    const treasurySummary = shiftData?.summary ?? posContext?.summary ?? null;
+    const sessionShiftId = shift?.id ? String(shift.id) : sessionShiftIdOf(bootstrapSession);
+    const hasOpenShiftContext = Boolean(sessionShiftId && (shiftOpen || bootstrapSession?.shiftOpen || cachedShiftOpen));
+    /** للتحصيل والإغلاق — يتطلب وردية مؤكدة */
+    const effectiveShiftId = shiftOpen && sessionShiftId ? sessionShiftId : '';
+    /** لتحميل قوائم الطلبات — يكفي وجود وردية في الجلسة/الكاش */
+    const ordersShiftId = hasOpenShiftContext ? sessionShiftId : '';
+    const cashBoxId = shift?.cashBoxId ?? bootstrapSession?.cashBox?.id ?? selectedCashBoxId;
+    const { data: posSummaryFetched, refetch: refetchPosSummary, isPending: posSummaryPending, isError: posSummaryError } = usePosShiftSummary(effectiveShiftId || undefined, bootstrapSession?.posSummary);
+    const posSummary = posSummaryFetched ?? bootstrapSession?.posSummary ?? null;
+    const treasurySummary = shiftData?.summary ?? bootstrapSession?.summary ?? null;
     const closeShiftSummary = posSummary ?? (treasurySummary
         ? {
             expectedCash: treasurySummary.expectedCash,
             openingFloat: treasurySummary.openingFloat,
             totalSales: treasurySummary.totalSales,
+            salesTotal: treasurySummary.totalSales,
             pending: treasurySummary.pending ?? treasurySummary.pendingCashInCustody,
             pendingCashInCustody: treasurySummary.pendingCashInCustody,
             expensesTotal: treasurySummary.expensesTotal,
             ordersCount: treasurySummary.ordersCount,
+            uncollectedCount: treasurySummary.uncollectedCount,
+            uncollectedTotal: treasurySummary.uncollectedTotal,
             byPaymentMethod: treasurySummary.byPaymentMethod,
             salesByMethod: treasurySummary.salesByMethod,
             expensesByPaymentMethod: treasurySummary.expensesByPaymentMethod,
@@ -57,15 +97,23 @@ export function usePosWorkspace() {
         }
         : null);
     const displayPosSummary = posSummary ?? closeShiftSummary;
-    const { data: uncollectedPages, isPending: uncollectedPending, isError: uncollectedError, refetch: refetchUncollected, fetchNextPage: fetchNextUncollectedPage, hasNextPage: hasMoreUncollected, isFetchingNextPage: uncollectedLoadingMore, } = useShiftUncollectedOrders(effectiveShiftId);
-    const { data: collectedPages, isPending: collectedPending, isError: collectedError, refetch: refetchCollected, fetchNextPage, hasNextPage, isFetchingNextPage, } = useShiftCollectedOrders(effectiveShiftId);
-    const shiftOrdersPending = uncollectedPending && collectedPending;
+    const { data: uncollectedPages, isPending: uncollectedPending, isError: uncollectedError, refetch: refetchUncollected, fetchNextPage: fetchNextUncollectedPage, hasNextPage: hasMoreUncollected, isFetchingNextPage: uncollectedLoadingMore, } = useShiftUncollectedOrders(ordersShiftId, !sessionReady || !sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersUncollected'));
+    const { data: collectedPages, isPending: collectedPending, isError: collectedError, refetch: refetchCollected, fetchNextPage, hasNextPage, isFetchingNextPage, } = useShiftCollectedOrders(ordersShiftId, !sessionReady || !sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersCollected'));
+    const hasShiftOrdersSeed = sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersUncollected')
+        || sessionHasOrderSeed(bootstrapSession, ordersShiftId, 'ordersCollected');
+    const shiftOrdersPending = !hasShiftOrdersSeed && uncollectedPending && collectedPending;
     const shiftOrdersError = uncollectedError || collectedError;
     const refetchShiftOrders = async () => {
         await Promise.all([refetchUncollected(), refetchCollected()]);
     };
-    const { data: apiSuspended = [], isPending: suspendedPending, refetch: refetchSuspended } = useSuspendedOrders(effectiveBranchId);
+    const { data: apiSuspendedFetched = [], isPending: suspendedPending, refetch: refetchSuspended } = useSuspendedOrders(effectiveBranchId, !sessionReady || !sessionHasSuspendedSeed(bootstrapSession, effectiveBranchId));
+    const apiSuspended = bootstrapSession?.suspendedOrders ?? apiSuspendedFetched;
+    const suspendedShowPending = suspendedPending && apiSuspended.length === 0;
     const [printingEnabled, setPrintingEnabled] = useState(() => canUsePosPrinting(permissions));
+    useEffect(() => {
+        if (sessionReady)
+            markPosPerf('session-bootstrap');
+    }, [sessionReady]);
     useEffect(() => {
         setPrintingEnabled(canUsePosPrinting(permissions));
         const onSettingsChange = () => setPrintingEnabled(canUsePosPrinting(permissions));
@@ -75,8 +123,13 @@ export function usePosWorkspace() {
     useEffect(() => {
         if (!effectiveBranchId || !accessToken)
             return;
-        hydrateReceiptSettingsFromServer(effectiveBranchId, accessToken).catch(() => { });
-    }, [effectiveBranchId, accessToken]);
+        const remote = bootstrapSession?.receiptSettings;
+        if (remote) {
+            const merged = mergeReceiptSettings(getReceiptSettings(), remote.settings ?? null);
+            saveReceiptSettings(merged);
+            return;
+        }
+    }, [effectiveBranchId, accessToken, bootstrapSession?.receiptSettings]);
     const { closeShift } = useShiftMutations();
     const operatorName = user?.fullName?.trim() || user?.username || 'مستخدم';
     const shiftOperatorName = shift?.openedBy?.fullName?.trim() || operatorName;
@@ -85,18 +138,18 @@ export function usePosWorkspace() {
             writePosBranchId(effectiveBranchId);
     }, [effectiveBranchId]);
     useEffect(() => {
-        if (posContext?.branch?.id) {
-            setBranchId(posContext.branch.id);
-            writePosBranchId(posContext.branch.id);
+        if (bootstrapSession?.branch?.id) {
+            setBranchId(bootstrapSession.branch.id);
+            writePosBranchId(bootstrapSession.branch.id);
         }
-        if (posContext?.cashBox?.id)
-            setSelectedCashBoxId(posContext.cashBox.id);
-    }, [posContext]);
+        if (bootstrapSession?.cashBox?.id)
+            setSelectedCashBoxId(bootstrapSession.cashBox.id);
+    }, [bootstrapSession]);
     useEffect(() => {
-        const boxId = shift?.cashBoxId ?? posContext?.cashBox?.id;
+        const boxId = shift?.cashBoxId ?? bootstrapSession?.cashBox?.id;
         if (boxId)
             setSelectedCashBoxId(boxId);
-    }, [shift?.cashBoxId, posContext?.cashBox?.id]);
+    }, [shift?.cashBoxId, bootstrapSession?.cashBox?.id]);
     useEffect(() => {
         if (cashBoxes.length && !selectedCashBoxId)
             setSelectedCashBoxId(cashBoxes[0].id);
@@ -108,9 +161,19 @@ export function usePosWorkspace() {
         if (uncollected.length > 0 || collected.length > 0) {
             return [...uncollected, ...collected];
         }
-        const fromSummary = posSummary?.shiftClosedOrders ?? posContext?.posSummary?.shiftClosedOrders;
+        const bootstrapMatchesShift = sessionShiftIdOf(bootstrapSession) === ordersShiftId;
+        const bootstrapUncollected = bootstrapMatchesShift
+            ? bootstrapSession?.ordersUncollected?.orders ?? []
+            : [];
+        const bootstrapCollected = bootstrapMatchesShift
+            ? bootstrapSession?.ordersCollected?.orders ?? []
+            : [];
+        if (bootstrapUncollected.length > 0 || bootstrapCollected.length > 0) {
+            return [...bootstrapUncollected, ...bootstrapCollected];
+        }
+        const fromSummary = posSummary?.shiftClosedOrders ?? bootstrapSession?.posSummary?.shiftClosedOrders;
         return fromSummary ?? [];
-    }, [uncollectedPages, collectedPages, posSummary, posContext]);
+    }, [uncollectedPages, collectedPages, posSummary, bootstrapSession, ordersShiftId]);
     const shiftClosedOrders = useMemo(() => {
         const seen = new Set();
         return shiftClosedOrdersSource
@@ -126,14 +189,16 @@ export function usePosWorkspace() {
     const uncollectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderUncollected(o)), [shiftClosedOrders]);
     const collectedOrders = useMemo(() => shiftClosedOrders.filter((o) => isShiftOrderCollected(o)), [shiftClosedOrders]);
     const uncollectedAmount = useMemo(() => uncollectedOrders.reduce((s, o) => s + o.total, 0), [uncollectedOrders]);
-    const displayUncollectedCount = displayPosSummary?.uncollectedCount
-        ?? uncollectedOrders.length;
-    const displayUncollectedAmount = displayPosSummary?.uncollectedTotal
+    const summaryOrdersCount = readCount(displayPosSummary?.ordersCount);
+    const summaryUncollectedCount = readCount(displayPosSummary?.uncollectedCount);
+    const displayUncollectedCount = summaryUncollectedCount ?? uncollectedOrders.length;
+    const displayUncollectedAmount = readCount(displayPosSummary?.uncollectedTotal)
         ?? uncollectedAmount;
-    const summaryOrdersCount = displayPosSummary?.ordersCount;
-    const displayCollectedCount = summaryOrdersCount != null && displayPosSummary?.uncollectedCount != null
-        ? summaryOrdersCount - displayPosSummary.uncollectedCount
+    const displayCollectedCount = summaryOrdersCount != null && summaryUncollectedCount != null
+        ? Math.max(0, summaryOrdersCount - summaryUncollectedCount)
         : collectedOrders.length;
+    const displaySuspendedCount = readCount(displayPosSummary?.suspendedCount)
+        ?? suspendedOrders.length;
     const resolvedBranchId = posContext?.branch?.id || branchId || branchList[0]?.id;
     const resolvedCashBoxId = posContext?.cashBox?.id || selectedCashBoxId || cashBoxes[0]?.id;
     const contextReady = Boolean(resolvedBranchId && resolvedCashBoxId);
@@ -143,15 +208,8 @@ export function usePosWorkspace() {
             await refetchPosOrderData(queryClient, id);
         }
     };
-    const refreshAll = async () => {
-        invalidatePosQueries(queryClient);
-        await Promise.all([
-            refetchPosContext(),
-            refetchShift(),
-            refetchPosSummary(),
-            refetchShiftOrders(),
-            refetchSuspended(),
-        ]);
+    const refreshAll = () => {
+        void invalidatePosQueries(queryClient);
     };
     const resolveContextIds = async () => {
         if (posContext?.branch?.id && posContext?.cashBox?.id) {
@@ -217,7 +275,6 @@ export function usePosWorkspace() {
                 ...(payload.successorCashBoxId ? { successorCashBoxId: payload.successorCashBoxId } : {}),
                 ...(payload.successorOpeningFloat != null ? { successorOpeningFloat: payload.successorOpeningFloat } : {}),
             });
-            invalidatePosQueries(queryClient);
             await refreshAll();
             const handoff = result?.handoff;
             const successor = result?.successorShift;
@@ -239,7 +296,6 @@ export function usePosWorkspace() {
         catch (e) {
             const message = e.message ?? 'فشل إغلاق الوردية';
             if (message.includes('مغلقة بالفعل')) {
-                invalidatePosQueries(queryClient);
                 await refreshAll();
                 return { ok: true, message: 'الوردية مغلقة.' };
             }
@@ -313,8 +369,11 @@ export function usePosWorkspace() {
         permissions,
         printingEnabled,
         posContext,
-        posContextPending,
-        posContextFetching,
+        catalogFromSession: Boolean(bootstrapSession?.catalog),
+        posContextPending: shiftStatusPending,
+        posContextFetching: sessionBackgroundSyncing,
+        sessionBackgroundSyncing,
+        sessionReady,
         shiftStatusPending,
         cachedShiftOpen,
         posContextError,
@@ -333,7 +392,7 @@ export function usePosWorkspace() {
         posSummaryError,
         shiftOrdersPending,
         shiftOrdersError: shiftOrdersShowError,
-        suspendedPending,
+        suspendedPending: suspendedShowPending,
         suspendedOrders,
         shiftClosedOrders,
         uncollectedOrders,
@@ -342,6 +401,7 @@ export function usePosWorkspace() {
         displayUncollectedCount,
         displayUncollectedAmount,
         displayCollectedCount,
+        displaySuspendedCount,
         operatorName,
         shiftOperatorName,
         resolvedBranchId,
@@ -363,7 +423,7 @@ export function usePosWorkspace() {
         fetchNextUncollectedPage,
         hasMoreUncollected,
         uncollectedLoadingMore,
-        refetchPosContext,
+        refetchPosContext: refetchPosSession,
         refetchSuspended,
     };
 }

@@ -67,6 +67,8 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
   const [page, setPage] = useState(1);
   const visible = props.tab === 'uncollected' ? props.uncollected : props.collected;
   const totalCount = props.orders.length;
+  const uncollectedTabCount = props.totalUncollectedCount ?? props.uncollected.length;
+  const collectedTabCount = props.totalCollectedCount ?? props.collected.length;
 
   useEffect(() => {
     setPage(1);
@@ -113,8 +115,8 @@ export function ShiftOrdersSection(props: ShiftOrdersSectionProps) {
         onChange={(_, v) => props.onTabChange(v)}
         sx={{ mb: 1.5, minHeight: 40, '& .MuiTab-root': { minHeight: 40, fontWeight: 700 } }}
       >
-        <Tab value="uncollected" label={`غير محصل (${props.totalUncollectedCount ?? props.uncollected.length}${props.hasMoreUncollected ? '+' : ''})`} />
-        <Tab value="collected" label={`محصل (${props.totalCollectedCount ?? props.collected.length}${props.hasMoreCollected ? '+' : ''})`} />
+        <Tab value="uncollected" label={`غير محصل (${uncollectedTabCount}${props.hasMoreUncollected ? '+' : ''})`} />
+        <Tab value="collected" label={`محصل (${collectedTabCount}${props.hasMoreCollected ? '+' : ''})`} />
       </Tabs>
 
       {!props.shiftOpen && totalCount === 0 ? (

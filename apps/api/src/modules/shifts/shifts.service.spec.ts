@@ -1,8 +1,10 @@
-import { BadRequestException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { ShiftsService } from './shifts.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { SequenceService } from '../sequence/sequence.service';
 import { TreasuryService } from '../treasury/treasury.service';
+import { ProductionPlanService } from '../production-plan/production-plan.service';
+import { OrdersService } from '../orders/orders.service';
 
 describe('ShiftsService', () => {
   let service: ShiftsService;
@@ -22,12 +24,19 @@ describe('ShiftsService', () => {
 
   const sequenceMock = { getNextNumber: jest.fn().mockResolvedValue('SHIFT-202606-000001') };
   const treasuryMock = { recordTransaction: jest.fn() };
+  const productionPlanMock = { getSummaryMap: jest.fn().mockResolvedValue(new Map()) };
+  const ordersMock = {
+    listSuspended: jest.fn().mockResolvedValue([]),
+    listClosedForShift: jest.fn().mockResolvedValue({ orders: [], nextCursor: null }),
+  };
 
   beforeEach(() => {
     service = new ShiftsService(
       prismaMock as unknown as PrismaService,
       sequenceMock as unknown as SequenceService,
       treasuryMock as unknown as TreasuryService,
+      productionPlanMock as unknown as ProductionPlanService,
+      ordersMock as unknown as OrdersService,
     );
     jest.clearAllMocks();
   });

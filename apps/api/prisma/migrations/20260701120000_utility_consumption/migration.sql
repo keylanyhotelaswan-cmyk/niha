@@ -1,0 +1,1 @@
+-- Reserved migration slot (no schema changes).
